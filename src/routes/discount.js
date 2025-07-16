@@ -24,10 +24,5 @@ router.delete(
   discountCtrl.deleteDiscount
 );
 
-router.post(
-  '/validate',
-  verifyAccessToken, // optional: remove if public
-  discountCtrl.validateDiscount
-);
 
 export default router;
