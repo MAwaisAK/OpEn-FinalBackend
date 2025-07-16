@@ -11,6 +11,11 @@ router.post(
 );
 
 // Get all discounts
+router.get(
+  '/',
+  verifyAccessToken,
+  discountCtrl.getAllDiscounts
+);
 
 // Delete
 router.delete(
