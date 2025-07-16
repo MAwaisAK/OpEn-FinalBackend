@@ -17,12 +17,7 @@ router.get(
   discountCtrl.getAllDiscounts
 );
 
-// Delete
-router.delete(
-  '/:discountId',
-  verifyAccessToken,
-  discountCtrl.deleteDiscount
-);
+
 
 router.post(
   '/validate',
