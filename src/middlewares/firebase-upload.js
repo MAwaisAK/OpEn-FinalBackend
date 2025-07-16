@@ -1,7 +1,7 @@
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import { Storage } from '@google-cloud/storage';
-const Boom = require('boom');
+import Boom from "@hapi/boom"; // Preferred
 
 // Initialize GCS (will pick up GOOGLE_APPLICATION_CREDENTIALS)
 const gcs = new Storage({

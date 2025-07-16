@@ -2,7 +2,7 @@
 import Course from "../../models/courses";
 import User from "../../models/user";
 import Notification from "../../models/notifications";
-const Boom = require("boom");
+import Boom from "@hapi/boom"; // Preferred
 const { v4: uuidv4 } = require("uuid");
 
 // Google Cloud Storage client

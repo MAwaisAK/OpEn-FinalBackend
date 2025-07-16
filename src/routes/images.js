@@ -6,7 +6,9 @@ import ImageController from "../controllers/images";
 
 const router = express.Router();
 const storage = multer.memoryStorage();
-const upload = multer({ storage });
+const upload = multer({ storage,limits: {
+    fileSize: 100 * 1024 * 1024 // 100 MB
+  } });
 
 // Update landing image. Expects a file in the field "landingimg".
 router.put(

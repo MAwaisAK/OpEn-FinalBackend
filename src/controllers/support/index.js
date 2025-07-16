@@ -1,5 +1,5 @@
 import Report from "../../models/support"; // Your model file exporting the Mytriber (support) model
-const Boom = require("boom");
+import Boom from "@hapi/boom"; // Preferred
 
 /**
  * Create a new report.

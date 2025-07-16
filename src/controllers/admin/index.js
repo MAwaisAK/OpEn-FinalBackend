@@ -1,5 +1,5 @@
 import Admin from "../../models/admin";
-const Boom = require('boom');
+import Boom from "@hapi/boom"; // Preferred
 import {
 	signAccessToken,
 	signRefreshToken,

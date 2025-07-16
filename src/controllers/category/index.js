@@ -1,5 +1,5 @@
 import Category from "../../models/category"; // Your model file exporting the Category model
-const Boom = require("boom");
+import Boom from "@hapi/boom"; // Preferred
 
 /**
  * Create or update the single category document.

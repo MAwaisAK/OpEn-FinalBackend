@@ -1,5 +1,5 @@
 import { roles } from '../roles';
-import Boom from 'boom';
+import Boom from "@hapi/boom"; // Preferred
 
 const grantAccess = (action, resource) => {
   return async (req, res, next) => {

@@ -1,6 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const Boom = require("boom");
+import Boom from "@hapi/boom"; // Preferred
 const sharp = require("sharp");
 const { v4: uuidv4 } = require("uuid");
 

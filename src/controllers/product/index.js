@@ -1,5 +1,5 @@
 import Product from "../../models/product";
-const Boom = require("boom");
+import Boom from "@hapi/boom"; // Preferred
 import ProductSchema from "./validations";
 const { v4: uuidv4 } = require("uuid");
 const admin = require("firebase-admin");

@@ -1,6 +1,6 @@
 import Mytribe from "../../models/mytribes";
 import User from "../../models/user";
-import Boom from "boom";
+import Boom from "@hapi/boom"; // Preferred
 import { v4 as uuidv4 } from "uuid";
 
 import TribeChatLobby from "../../models/tribechatlobby.js";

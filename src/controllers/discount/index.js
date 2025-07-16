@@ -1,7 +1,7 @@
 
 import Discount from "../../models/discount"; // adjust path if needed
 import User from "../../models/user"
-const Boom = require("boom");
+import Boom from "@hapi/boom"; // Preferred
 
 /**
  * Helper: generate a random 6-character alphanumeric token.
@@ -126,7 +126,7 @@ export const getAllDiscounts = async (req, res, next) => {
 
 export const validateDiscount = async (req, res, next) => {
   try {
-    const { token, userId } = req.body;
+    const { token, userId, packageType } = req.body;
 
     if (!token) {
       return next(Boom.badRequest("Discount token is required."));
@@ -137,6 +137,21 @@ export const validateDiscount = async (req, res, next) => {
 
     if (!discount) {
       return next(Boom.notFound("Discount not found or invalid token."));
+    }
+
+    // ✅ Map packageType to expected discount.for value
+    let expectedDiscountFor;
+    if (["basic", "premium", "subscription"].includes(packageType)) {
+      expectedDiscountFor = "subscription";
+    } else if (["small", "large", "custom"].includes(packageType)) {
+      expectedDiscountFor = "tokens";
+    } else if (packageType === "course") {
+      expectedDiscountFor = "course";
+    }
+
+    // ✅ Check if discount.for matches expected value
+    if (discount.for !== expectedDiscountFor) {
+      return next(Boom.badRequest("This token is not applicable for the selected package type."));
     }
 
     // Check if it has remaining uses

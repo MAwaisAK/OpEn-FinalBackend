@@ -1,7 +1,7 @@
 import RateLimit from 'express-rate-limit';
 import RedisStore from 'rate-limit-redis';
 import redis from './clients/redis';
-import Boom from 'boom';
+import Boom from "@hapi/boom"; // Preferred
 
 const limiter = new RateLimit({
   store: new RedisStore({

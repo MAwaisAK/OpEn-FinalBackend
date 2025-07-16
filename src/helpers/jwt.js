@@ -1,5 +1,5 @@
 import JWT from "jsonwebtoken";
-import Boom from "boom";
+import Boom from "@hapi/boom"; // Preferred
 import redis from "../clients/redis";
 
 const signAccessToken = (data) => {

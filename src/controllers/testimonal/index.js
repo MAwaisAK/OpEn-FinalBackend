@@ -1,5 +1,5 @@
 import Testimonal from "../../models/testimonals";
-const Boom = require("boom");
+import Boom from "@hapi/boom"; // Preferred
 const { v4: uuidv4 } = require("uuid");
 const { Storage } = require("@google-cloud/storage");
 

@@ -1,6 +1,6 @@
 import Course from "../../models/user";
 import User from "../../models/user";
-const Boom = require("boom");
+import Boom from "@hapi/boom"; // Preferred
 const { v4: uuidv4 } = require("uuid");
 const { Storage } = require("@google-cloud/storage");
 

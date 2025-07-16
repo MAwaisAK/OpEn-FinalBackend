@@ -1,4 +1,4 @@
-const Boom = require('boom');
+import Boom from "@hapi/boom"; // Preferred
 import User from "../../models/user";
 import Admin from "../../models/admin.js";
 import Price from "../../models/price";
@@ -9,9 +9,9 @@ import Discount from "../../models/discount.js";
 import Payment from "../../models/payment.js";
 const bcrypt = require('bcrypt');
 import {
-	signAccessToken,
-	signRefreshToken,
-	verifyRefreshToken,
+  signAccessToken,
+  signRefreshToken,
+  verifyRefreshToken,
 } from "../../helpers/jwt";
 import ValidationSchema from "./validations";
 const redis = require("../../clients/redis").default;
@@ -111,7 +111,7 @@ const Register = async (req, res, next) => {
 
     // Generate verification token
     const verificationToken = crypto.randomBytes(32).toString('hex');
-    
+
     // Prepare user data for Redis
     const userData = {
       ...input,
@@ -125,24 +125,24 @@ const Register = async (req, res, next) => {
 
     // Save to Redis with 1 hour expiration
     await redis.setex(`temp_user:${stripeCustomerId}`, 3600, JSON.stringify(userData));
-    
+
     // Validate discount code
     if (input.discountCode) {
       discountDoc = await Discount.findOne({ token: input.discountCode });
-      
+
       if (discountDoc) {
         if (discountDoc.for !== 'subscription') {
           throw Boom.badRequest("This discount is not for subscriptions");
         }
-        
+
         if (discountDoc.used_by.length >= discountDoc.numberOfUses) {
           throw Boom.badRequest("Discount limit reached");
         }
-        
+
         if (discountDoc.used_by.includes(input.username)) {
           throw Boom.badRequest("You've already used this discount");
         }
-        
+
         discountValue = discountDoc.value;
       }
     }
@@ -150,12 +150,12 @@ const Register = async (req, res, next) => {
     // Get pricing
     const pricing = await Price.findOne();
     if (!pricing) throw Boom.badImplementation("Pricing not configured");
-    
+
     // Calculate price and tokens
     let price = 0;
     let tokens = 0;
     const billingPeriod = input.period === "year" ? "perYear" : "perMonth";
-    
+
     if (input.plan === "basic") {
       price = pricing.basic[billingPeriod].price;
       tokens = pricing.basic[billingPeriod].tokens;
@@ -165,11 +165,11 @@ const Register = async (req, res, next) => {
     } else {
       throw Boom.badRequest("Invalid plan");
     }
-    
+
     // Apply discount
-    const discountedPrice = Math.max(0, price - discountValue);
+    const discountedPrice = Math.max(0, Math.round((price - (price * discountValue / 100)) * 100) / 100);
     const amountInCents = Math.round(discountedPrice * 100);
-    
+
     // Create Stripe product
     const product = await stripe.products.create({
       name: `${input.plan.charAt(0).toUpperCase() + input.plan.slice(1)} Plan (${input.period})`,
@@ -202,18 +202,18 @@ const Register = async (req, res, next) => {
       payment_settings: { save_default_payment_method: "on_subscription" }
     });
     const periodEnd = subscription.trial_end ?? subscription.current_period_end;
-if (!periodEnd) {
-  // sanity check—this should never happen if Stripe returns one of these
-  throw Boom.badImplementation("Could not determine subscription end date");
-}
+    if (!periodEnd) {
+      // sanity check—this should never happen if Stripe returns one of these
+      throw Boom.badImplementation("Could not determine subscription end date");
+    }
 
-const trialEnds = new Date(periodEnd * 1000);
+    const trialEnds = new Date(periodEnd * 1000);
 
     if (!["trialing", "active"].includes(subscription.status)) {
-     // clean up and inform client
-     await stripe.subscriptions.del(subscription.id);
-     throw Boom.paymentRequired("Subscription setup failed; payment incomplete.");
-   }
+      // clean up and inform client
+      await stripe.subscriptions.del(subscription.id);
+      throw Boom.paymentRequired("Subscription setup failed; payment incomplete.");
+    }
 
     // Retrieve from Redis
     const redisData = await redis.get(`temp_user:${stripeCustomerId}`);
@@ -227,11 +227,11 @@ const trialEnds = new Date(periodEnd * 1000);
       subscribed_At: new Date(),
       tokens: tokens,
       trial_used: true,
-      trail_status:            'trialing',
+      trail_status: 'trialing',
       status: "active",
-     nextBillingDate:   trialEnds,
-     stripeSubscriptionId: subscription.id,
-     stripeCustomerId,
+      nextBillingDate: trialEnds,
+      stripeSubscriptionId: subscription.id,
+      stripeCustomerId,
     });
     const savedUser = await user.save();
 
@@ -247,13 +247,13 @@ const trialEnds = new Date(periodEnd * 1000);
     // Create payment record
     const paymentCount = await Payment.countDocuments();
     const uniquePaymentId = `P-${1000 + paymentCount + 1}`;
-    
+
     await Payment.create({
       user: savedUser._id,
       data: input.plan,
       paymentid: uniquePaymentId,
-      payment: discountedPrice,
-      discount: discountDoc?._id,
+      payment: discountedPrice || 0,
+      discount: discountDoc?.token,
       discountValue,
       tokens: tokens,
       status: "paid",
@@ -276,13 +276,13 @@ const trialEnds = new Date(periodEnd * 1000);
         <p>If you didn't create an account, please ignore this email.</p>
       `
     });
-    
+
     res.json({
       success: true,
       message: "Registration successful! Check your email for verification.",
       userId: savedUser._id
     });
-    
+
   } catch (error) {
     // Cleanup on failure
     if (stripeCustomerId) {
@@ -295,7 +295,7 @@ const trialEnds = new Date(periodEnd * 1000);
         console.error('Cleanup failed:', cleanupError);
       }
     }
-    
+
     next(Boom.isBoom(error) ? error : Boom.badImplementation(error.message));
   }
 };
@@ -324,53 +324,53 @@ export const checkDuplicates = async (req, res, next) => {
 };
 
 const Login = async (req, res, next) => {
-    const input = req.body;
-    try {
-      const user = await User.findOne({ email: input.email });
-      if (!user) {
-        return next(Boom.notFound("Email not found."));
-      }
+  const input = req.body;
+  try {
+    const user = await User.findOne({ email: input.email });
+    if (!user) {
+      return next(Boom.notFound("Email not found."));
+    }
 
-      if (user.status === "inactive") {
-        return next(Boom.unauthorized("Account has been suspended. Please contact support for more info."));
-      }
-  
-      const isMatched = await user.isValidPass(input.password);
-      if (!isMatched) {
-        return next(Boom.unauthorized("Invalid email or password."));
-      }
-  
-      // If the user is not verified, generate a new verification token and resend email
-      if (user.verified === "No") {
-        // Generate a new verification token
-        const verificationToken = crypto.randomBytes(32).toString("hex");
-        user.verificationToken = verificationToken; // Override the previous token
-        await user.save();
-  
-        // Send the new verification email
-        const frontendUrl = input.frontendUrl || "https://openpreneurs.business";
-        const verificationLink = `${frontendUrl}/verify/${verificationToken}`;
-        const mailOptions = {
-          from: "no-reply@openpreneurs.business",
-          to: input.email, // Send to user's email
-          subject: "Verify Your Email",
-          text: `Please click on the following link to verify your email: ${verificationLink}`,
-        };
-        try {
-          await transporter.sendMail(mailOptions);
-          return next(
-            Boom.unauthorized(
-              "Account not verified. A new verification email has been sent to your email address."
-            )
-          );
-        } catch (emailError) {
-          return next(
-            Boom.badImplementation("Could not send verification email. Please try again later.")
-          );
-        }
-      }
+    if (user.status === "inactive") {
+      return next(Boom.unauthorized("Account has been suspended. Please contact support for more info."));
+    }
 
-          // 2️⃣ PROFILE COMPLETENESS CHECK
+    const isMatched = await user.isValidPass(input.password);
+    if (!isMatched) {
+      return next(Boom.unauthorized("Invalid email or password."));
+    }
+
+    // If the user is not verified, generate a new verification token and resend email
+    if (user.verified === "No") {
+      // Generate a new verification token
+      const verificationToken = crypto.randomBytes(32).toString("hex");
+      user.verificationToken = verificationToken; // Override the previous token
+      await user.save();
+
+      // Send the new verification email
+      const frontendUrl = input.frontendUrl || "https://openpreneurs.business";
+      const verificationLink = `${frontendUrl}/verify/${verificationToken}`;
+      const mailOptions = {
+        from: "no-reply@openpreneurs.business",
+        to: input.email, // Send to user's email
+        subject: "Verify Your Email",
+        text: `Please click on the following link to verify your email: ${verificationLink}`,
+      };
+      try {
+        await transporter.sendMail(mailOptions);
+        return next(
+          Boom.unauthorized(
+            "Account not verified. A new verification email has been sent to your email address."
+          )
+        );
+      } catch (emailError) {
+        return next(
+          Boom.badImplementation("Could not send verification email. Please try again later.")
+        );
+      }
+    }
+
+    // 2️⃣ PROFILE COMPLETENESS CHECK
     const required = [
       "profile_pic",
       "display_banner",
@@ -400,186 +400,186 @@ const Login = async (req, res, next) => {
         { upsert: true }
       );
     }
-  
-      const tokenExpiry = input.rememberMe ? "7d" : "1h"; // 7 days for "Remember Me", 1 hour otherwise
-  
-      const accessToken = await signAccessToken({ user_id: user._id, role: user.role }, tokenExpiry);
-      const refreshToken = await signRefreshToken(user._id);
-  
-      // If the user is verified, proceed with login
-      const userData = user.toObject();
-      delete userData.password;
-      delete userData.__v;
-  
-      res.json({ user: userData, accessToken, refreshToken });
-    } catch (e) {
-      next(e);
+
+    const tokenExpiry = input.rememberMe ? "7d" : "1h"; // 7 days for "Remember Me", 1 hour otherwise
+
+    const accessToken = await signAccessToken({ user_id: user._id, role: user.role }, tokenExpiry);
+    const refreshToken = await signRefreshToken(user._id);
+
+    // If the user is verified, proceed with login
+    const userData = user.toObject();
+    delete userData.password;
+    delete userData.__v;
+
+    res.json({ user: userData, accessToken, refreshToken });
+  } catch (e) {
+    next(e);
+  }
+};
+
+const deleteUser = async (req, res, next) => {
+  try {
+    const userId = req.params.id;
+
+    const user = await User.findByIdAndDelete(userId);
+
+    if (!user) {
+      return next(Boom.notFound("User not found."));
     }
-  };
-  
-  const deleteUser = async (req, res, next) => {
-    try {
-      const userId = req.params.id;
-  
-      const user = await User.findByIdAndDelete(userId);
-  
-      if (!user) {
-        return next(Boom.notFound("User not found."));
-      }
-  
-      res.json({ message: "User deleted successfully." });
-    } catch (e) {
-      next(e);
-    }
-  };
-  
+
+    res.json({ message: "User deleted successfully." });
+  } catch (e) {
+    next(e);
+  }
+};
+
 
 
 const RefreshToken = async (req, res, next) => {
-	const { refresh_token } = req.body;
+  const { refresh_token } = req.body;
 
-	if (!refresh_token) {
-		return next(Boom.badRequest("Refresh token missing."));
-	}
+  if (!refresh_token) {
+    return next(Boom.badRequest("Refresh token missing."));
+  }
 
-	try {
-		const user_id = await verifyRefreshToken(refresh_token);
-		const accessToken = await signAccessToken(user_id);
-		const newRefreshToken = await signRefreshToken(user_id);
+  try {
+    const user_id = await verifyRefreshToken(refresh_token);
+    const accessToken = await signAccessToken(user_id);
+    const newRefreshToken = await signRefreshToken(user_id);
 
-		res.json({ accessToken, refreshToken: newRefreshToken });
-	} catch (e) {
-		next(e);
-	}
+    res.json({ accessToken, refreshToken: newRefreshToken });
+  } catch (e) {
+    next(e);
+  }
 };
 
 const Logout = async (req, res, next) => {
   const { refresh_token } = req.body;
 
   if (!refresh_token) {
-      return next(Boom.badRequest("Refresh token missing."));
+    return next(Boom.badRequest("Refresh token missing."));
   }
 
   try {
-      const user_id = await verifyRefreshToken(refresh_token);
+    const user_id = await verifyRefreshToken(refresh_token);
 
-      if (!user_id) {
-          return next(Boom.unauthorized("Invalid refresh token."));
-      }
+    if (!user_id) {
+      return next(Boom.unauthorized("Invalid refresh token."));
+    }
 
-      // Correct Redis call
-      const result = await redis.del(user_id.toString()); // Ensure it's a string
+    // Correct Redis call
+    const result = await redis.del(user_id.toString()); // Ensure it's a string
 
 
-      res.json({ message: "Logout successful" });
+    res.json({ message: "Logout successful" });
   } catch (e) {
-      console.error("Logout error:", e);
-      next(e);
+    console.error("Logout error:", e);
+    next(e);
   }
 };
 
 const updateAddress = async (req, res, next) => {
-    const user_id = req.payload?.user_id; // Use optional chaining to safely access user_id
-    if (!user_id) {
-        return res.status(401).json({ message: "User ID not found in token." }); // Return a response if user_id is not available
+  const user_id = req.payload?.user_id; // Use optional chaining to safely access user_id
+  if (!user_id) {
+    return res.status(401).json({ message: "User ID not found in token." }); // Return a response if user_id is not available
+  }
+
+  const { address, city, province, postcode, phone } = req.body;
+
+  try {
+    // Find the user first to ensure they exist and retrieve the current state of the arrays
+    const user = await User.findById(user_id);
+    if (!user) {
+      return next(Boom.notFound("User not found."));
     }
 
-    const { address, city, province, postcode, phone } = req.body;
+    // Use the existing values or create empty strings if they do not exist
+    const updatedAddress = user.address || [];
+    const updatedCity = user.townOrCity || [];
+    const updatedState = user.province || [];
+    const updatedPostcode = user.postcode || [];
+    const updatedPhone = user.phone || [];
 
-    try {
-        // Find the user first to ensure they exist and retrieve the current state of the arrays
-        const user = await User.findById(user_id);
-        if (!user) {
-            return next(Boom.notFound("User not found."));
-        }
-
-        // Use the existing values or create empty strings if they do not exist
-        const updatedAddress = user.address || [];
-        const updatedCity = user.townOrCity || [];
-        const updatedState = user.province || [];
-        const updatedPostcode = user.postcode || [];
-        const updatedPhone = user.phone || [];
-
-        // Ensure the arrays have at least 2 elements (index 0 and 1)
-        if (updatedAddress.length < 1) {
-            updatedAddress[0] = address; // Set address at index 1
-        } else {
-            updatedAddress[0] = address; // Update existing index 1
-        }
-
-        if (updatedCity.length < 1) {
-            updatedCity[0] = city; // Set city at index 1
-        } else {
-            updatedCity[0] = city; // Update existing index 1
-        }
-
-        if (updatedState.length < 1) {
-            updatedState[0] = province; // Set state at index 1
-        } else {
-            updatedState[0] = province; // Update existing index 1
-        }
-
-        if (updatedPostcode.length < 1) {
-            updatedPostcode[0] = postcode; // Set postcode at index 1
-        } else {
-            updatedPostcode[0] = postcode; // Update existing index 1
-        }
-
-        if (updatedPhone.length < 1) {
-            updatedPhone[0] = phone; // Set phone at index 1
-        } else {
-            updatedPhone[0] = phone; // Update existing index 1
-        }
-
-        // Now update the user with the modified arrays
-        const updatedUser = await User.findByIdAndUpdate(
-            user_id,
-            {
-                $set: {
-                    address: updatedAddress,
-                    townOrCity: updatedCity,
-                    province: updatedState,
-                    postcode: updatedPostcode,
-                    phone: updatedPhone,
-                },
-            },
-            { new: true, runValidators: true }
-        );
-
-        res.json(updatedUser);
-    } catch (e) {
-        next(e);
+    // Ensure the arrays have at least 2 elements (index 0 and 1)
+    if (updatedAddress.length < 1) {
+      updatedAddress[0] = address; // Set address at index 1
+    } else {
+      updatedAddress[0] = address; // Update existing index 1
     }
+
+    if (updatedCity.length < 1) {
+      updatedCity[0] = city; // Set city at index 1
+    } else {
+      updatedCity[0] = city; // Update existing index 1
+    }
+
+    if (updatedState.length < 1) {
+      updatedState[0] = province; // Set state at index 1
+    } else {
+      updatedState[0] = province; // Update existing index 1
+    }
+
+    if (updatedPostcode.length < 1) {
+      updatedPostcode[0] = postcode; // Set postcode at index 1
+    } else {
+      updatedPostcode[0] = postcode; // Update existing index 1
+    }
+
+    if (updatedPhone.length < 1) {
+      updatedPhone[0] = phone; // Set phone at index 1
+    } else {
+      updatedPhone[0] = phone; // Update existing index 1
+    }
+
+    // Now update the user with the modified arrays
+    const updatedUser = await User.findByIdAndUpdate(
+      user_id,
+      {
+        $set: {
+          address: updatedAddress,
+          townOrCity: updatedCity,
+          province: updatedState,
+          postcode: updatedPostcode,
+          phone: updatedPhone,
+        },
+      },
+      { new: true, runValidators: true }
+    );
+
+    res.json(updatedUser);
+  } catch (e) {
+    next(e);
+  }
 };
 
 const getAddress = async (req, res, next) => {
-    const email = req.query.email; 
+  const email = req.query.email;
 
-    if (!email) {
-        return res.status(401).json({ message: "Email not found in request." }); // Return an error if email is not provided
+  if (!email) {
+    return res.status(401).json({ message: "Email not found in request." }); // Return an error if email is not provided
+  }
+
+  try {
+    // Find the user by email to retrieve the address information
+    const user = await User.findOne({ email }).select('firstName lastName address townOrCity province postcode phone');
+    if (!user) {
+      return next(Boom.notFound("User not found.")); // Return error if user is not found
     }
+    // Format the response to return the user's address information
+    const userAddress = {
+      firstName: user.firstName || "",
+      lastName: user.lastName || "",
+      address: user.address || "",
+      city: user.townOrCity || "",
+      province: user.province || "",
+      postcode: user.postcode || "",
+      phone: user.phone || "",
+    };
 
-    try {
-        // Find the user by email to retrieve the address information
-        const user = await User.findOne({ email }).select('firstName lastName address townOrCity province postcode phone');
-        if (!user) {
-            return next(Boom.notFound("User not found.")); // Return error if user is not found
-        }
-        // Format the response to return the user's address information
-        const userAddress = {
-            firstName: user.firstName || "",
-            lastName: user.lastName || "",
-            address: user.address || "",
-            city: user.townOrCity || "",
-            province: user.province || "",
-            postcode: user.postcode || "",
-            phone: user.phone || "",
-        };
-
-        res.json(userAddress); // Send the user's address data as a response
-    } catch (e) {
-        next(e); // Pass the error to the next middleware
-    }
+    res.json(userAddress); // Send the user's address data as a response
+  } catch (e) {
+    next(e); // Pass the error to the next middleware
+  }
 };
 
 
@@ -613,7 +613,7 @@ export const Me = async (req, res, next) => {
 
 const updateUserInfo = async (req, res, next) => {
   try {
-    
+
     // Extract the user ID from URL params, body, or the authenticated user.
     const userId = req.params.id || req.body.id || req.user?.id;
 
@@ -693,72 +693,72 @@ const updateUserInfo = async (req, res, next) => {
     } else {
       user.aboutme = null;
     }
-    
+
     if (facebook_link) {
       user.facebook_link = facebook_link;
     } else {
       user.facebook_link = null;
     }
-    
+
     if (linkedin_link) {
       user.linkedin_link = linkedin_link;
     } else {
       user.linkedin_link = null;
     }
-    
+
     if (instagram_link) {
       user.instagram_link = instagram_link;
     } else {
       user.instagram_link = null;
     }
-    
+
     if (x_link) {
       user.x_link = x_link;
     } else {
       user.x_link = null;
     }
-    
+
     if (web_link) {
       user.web_link = web_link;
     } else {
       user.web_link = null;
     }
-    
+
     if (business_country) {
       user.business_country = business_country;
     } else {
       user.business_country = null;
     }
-    
+
     if (business_industry) {
       user.business_industry = business_industry;
     } else {
       user.business_industry = null;
     }
-    
+
     if (value_chainstake) {
       user.value_chainstake = value_chainstake;
     } else {
       user.value_chainstake = null;
     }
-    
+
     if (markets_covered) {
       user.markets_covered = markets_covered;
     } else {
       user.markets_covered = null;
     }
-    
+
     if (immediate_needs) {
       user.immediate_needs = immediate_needs;
     } else {
       user.immediate_needs = null;
     }
-    
+
     if (primary_business) {
       user.primary_business = primary_business;
     } else {
       user.primary_business = null;
-    }   
+    }
 
     // Update privacy if provided.
     if (privacy) user.privacy = privacy;
@@ -792,161 +792,180 @@ const updateUserInfo = async (req, res, next) => {
 };
 
 
-  // Helper function to get the date range based on PST
+// Helper function to get the date range based on PST
 const getDateRangeInPST = (type) => {
-    const now = new Date();
-  
-    // Adjust for Pakistan Standard Time (UTC+5)
-    const utcOffset = 5 * 60 * 60 * 1000; // 5 hours in milliseconds
-    const pstNow = new Date(now.getTime() + utcOffset);
-  
-    let start, end;
-  
-    switch (type) {
-      case "today":
-        start = new Date(pstNow.setHours(0, 0, 0, 0) - utcOffset);
-        end = new Date(pstNow.setHours(23, 59, 59, 999) - utcOffset);
-        break;
-      case "week":
-        const firstDayOfWeek = pstNow.getDate() - pstNow.getDay();
-        start = new Date(new Date(pstNow.setDate(firstDayOfWeek)).setHours(0, 0, 0, 0) - utcOffset);
-        end = new Date(new Date(pstNow.setDate(firstDayOfWeek + 6)).setHours(23, 59, 59, 999) - utcOffset);
-        break;
-      case "month":
-        start = new Date(new Date(pstNow.getFullYear(), pstNow.getMonth(), 1).setHours(0, 0, 0, 0) - utcOffset);
-        end = new Date(new Date(pstNow.getFullYear(), pstNow.getMonth() + 1, 0).setHours(23, 59, 59, 999) - utcOffset);
-        break;
-      case "year":
-        start = new Date(new Date(pstNow.getFullYear(), 0, 1).setHours(0, 0, 0, 0) - utcOffset);
-        end = new Date(new Date(pstNow.getFullYear(), 11, 31).setHours(23, 59, 59, 999) - utcOffset);
-        break;
-      default:
-        throw new Error("Invalid type for date range.");
-    }
-  
-    return { start, end };
-  };
+  const now = new Date();
 
-  export const updateUserAdminDetails = async (req, res, next) => {
-    try {
-      const { userId } = req.params; // Extract userId from request params
-      const { tokens, subscription, role, status, level } = req.body; // Data to update
-  
-      // Validate user input (Optional)
-      const validSubscriptions = ["none", "basic", "premium"];
-      const validRoles = ["user", "admin"];
-      const validStatuses = ["active", "inactive", "suspended"];
-      const validLevels = ["super", "admin", "moderator"];
-  
-      if (subscription && !validSubscriptions.includes(subscription)) {
-        return next(Boom.badRequest("Invalid subscription type."));
-      }
-      if (role && !validRoles.includes(role)) {
-        return next(Boom.badRequest("Invalid role."));
-      }
-      if (status && !validStatuses.includes(status)) {
-        return next(Boom.badRequest("Invalid status."));
-      }
-      if (level && !validLevels.includes(level)) {
-        return next(Boom.badRequest("Invalid level."));
-      }
-  
-      // Build dynamic update object
-      const updateData = {};
-      if (tokens !== undefined) updateData.tokens = tokens;
-      if (subscription) updateData.subscription = subscription;
-      if (role) updateData.role = role;
-      if (status) updateData.status = status;
-      if (level) updateData.level = level;
-  
-      // Update the user and return the updated document
-      const updatedUser = await User.findByIdAndUpdate(userId, updateData, {
-        new: true, // Return the updated document
-        runValidators: true, // Ensure Mongoose schema validations run
-      });
-  
-      if (!updatedUser) {
-        return next(Boom.notFound("User not found."));
-      }
-  
-      res.status(200).json({
-        success: true,
-        message: "User updated successfully.",
-        data: updatedUser,
-      });
-    } catch (error) {
-      console.error("Error updating user:", error);
-      next(Boom.internal("Error updating user."));
-    }
-  };
-  
-  export const getAllAdminUsers = async (req, res, next) => {
-    try {
-      // Extract optional query parameters for filtering
-      const { role, status, subscription, limit = 50, page = 1 } = req.query;
-  
-      // Build dynamic query object
-      const query = {};
-      if (role) query.role = role;
-      if (status) query.status = status;
-      if (subscription) query.subscription = subscription;
-  
-      // Pagination: Calculate skip value
-      const skip = (page - 1) * limit;
-  
-      // Fetch users with filtering and pagination
-      const users = await User.find(query)
-        .skip(skip)
-        .limit(parseInt(limit))
-        .select("-password -resetPasswordToken -resetPasswordExpires") // Exclude sensitive fields
-        .populate("joined_tribes", "name") // Populate joined_tribes (optional)
-        .populate("mytribers", "username email") // Populate mytribers (optional)
-        .populate("chat_lobby", "name"); // Populate chat_lobby (optional)
-  
-      // Get total count for pagination metadata
-      const totalUsers = await User.countDocuments(query);
-  
-      res.status(200).json({
-        success: true,
-        totalUsers,
-        currentPage: parseInt(page),
-        totalPages: Math.ceil(totalUsers / limit),
-        users,
-      });
-    } catch (error) {
-      console.error("Error fetching users:", error);
-      next(Boom.internal("Error fetching users."));
-    }
-  };
-  
-  // Function to get the total number of registrations based on the date range
-  const GetTotalNumberOfRegistrationsByDateRange = async (req, res, next) => {
-    const { rangeType } = req.params; // e.g., 'today', 'week', 'month', 'year'
-  
-    try {
-      const { start, end } = getDateRangeInPST(rangeType);
-  
-      // Count the number of registrations based on the 'createdAt' field
-      const totalRegistrationsCount = await User.countDocuments({
-        createdAt: { $gte: start, $lte: end },
-      });
-  
-      res.json({
-        range: rangeType,
-        totalRegistrations: totalRegistrationsCount,
-      });
-    } catch (e) {
-      next(e);
-    }
-  };
+  // Adjust for Pakistan Standard Time (UTC+5)
+  const utcOffset = 5 * 60 * 60 * 1000; // 5 hours in milliseconds
+  const pstNow = new Date(now.getTime() + utcOffset);
 
-  const getAllUsers = async (req, res, next) => {
-    try {
-        const users = await User.find().select("-password -__v"); // Exclude sensitive fields
-        res.json(users);
-    } catch (e) {
-        next(e);
+  let start, end;
+
+  switch (type) {
+    case "today":
+      start = new Date(pstNow.setHours(0, 0, 0, 0) - utcOffset);
+      end = new Date(pstNow.setHours(23, 59, 59, 999) - utcOffset);
+      break;
+    case "week":
+      const firstDayOfWeek = pstNow.getDate() - pstNow.getDay();
+      start = new Date(new Date(pstNow.setDate(firstDayOfWeek)).setHours(0, 0, 0, 0) - utcOffset);
+      end = new Date(new Date(pstNow.setDate(firstDayOfWeek + 6)).setHours(23, 59, 59, 999) - utcOffset);
+      break;
+    case "month":
+      start = new Date(new Date(pstNow.getFullYear(), pstNow.getMonth(), 1).setHours(0, 0, 0, 0) - utcOffset);
+      end = new Date(new Date(pstNow.getFullYear(), pstNow.getMonth() + 1, 0).setHours(23, 59, 59, 999) - utcOffset);
+      break;
+    case "year":
+      start = new Date(new Date(pstNow.getFullYear(), 0, 1).setHours(0, 0, 0, 0) - utcOffset);
+      end = new Date(new Date(pstNow.getFullYear(), 11, 31).setHours(23, 59, 59, 999) - utcOffset);
+      break;
+    default:
+      throw new Error("Invalid type for date range.");
+  }
+
+  return { start, end };
+};
+
+export const updateUserAdminDetails = async (req, res, next) => {
+  try {
+    const { userId } = req.params; // Extract userId from request params
+    const { tokens, subscription, role, status, level, period } = req.body; // Data to update
+
+    // Validate user input (Optional)
+    const validSubscriptions = ["none", "basic", "premium"];
+    const validRoles = ["user", "admin"];
+    const validStatuses = ["active", "inactive", "suspended"];
+    const validLevels = ["super", "admin", "moderator"];
+
+    if (subscription && !validSubscriptions.includes(subscription)) {
+      return next(Boom.badRequest("Invalid subscription type."));
     }
+    if (role && !validRoles.includes(role)) {
+      return next(Boom.badRequest("Invalid role."));
+    }
+    if (status && !validStatuses.includes(status)) {
+      return next(Boom.badRequest("Invalid status."));
+    }
+    if (level && !validLevels.includes(level)) {
+      return next(Boom.badRequest("Invalid level."));
+    }
+
+    // Build dynamic update object
+    const updateData = {};
+    if (tokens !== undefined) updateData.tokens = tokens;
+    updateData.subscription = subscription;
+
+    if (subscription === "none") {
+      updateData.period = "none"; // Set period to "none" if subscription is "none".
+      updateData.nextBillingDate = null; // Set nextBillingDate to null if subscription is "none".
+    } else {
+      updateData.period = period; // Set the period based on user input.
+
+      // Calculate nextBillingDate based on the period.
+      const today = new Date();
+      let nextBillingDate;
+
+      if (period === "month") {
+        nextBillingDate = new Date(today.setMonth(today.getMonth() + 1)); // Set to next month.
+      } else if (period === "year") {
+        nextBillingDate = new Date(today.setFullYear(today.getFullYear() + 1)); // Set to next year.
+      }
+
+      updateData.nextBillingDate = nextBillingDate;
+    }
+    if (role) updateData.role = role;
+    if (status) updateData.status = status;
+    if (level) updateData.level = level;
+
+    // Update the user and return the updated document
+    const updatedUser = await User.findByIdAndUpdate(userId, updateData, {
+      new: true, // Return the updated document
+      runValidators: true, // Ensure Mongoose schema validations run
+    });
+
+    if (!updatedUser) {
+      return next(Boom.notFound("User not found."));
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "User updated successfully.",
+      data: updatedUser,
+    });
+  } catch (error) {
+    console.error("Error updating user:", error);
+    next(Boom.internal("Error updating user."));
+  }
+};
+
+export const getAllAdminUsers = async (req, res, next) => {
+  try {
+    // Extract optional query parameters for filtering
+    const { role, status, subscription, limit = 50, page = 1 } = req.query;
+
+    // Build dynamic query object
+    const query = {};
+    if (role) query.role = role;
+    if (status) query.status = status;
+    if (subscription) query.subscription = subscription;
+
+    // Pagination: Calculate skip value
+    const skip = (page - 1) * limit;
+
+    // Fetch users with filtering and pagination
+    const users = await User.find(query)
+      .skip(skip)
+      .limit(parseInt(limit))
+      .select("-password -resetPasswordToken -resetPasswordExpires") // Exclude sensitive fields
+      .populate("joined_tribes", "name") // Populate joined_tribes (optional)
+      .populate("mytribers", "username email") // Populate mytribers (optional)
+      .populate("chat_lobby", "name"); // Populate chat_lobby (optional)
+
+    // Get total count for pagination metadata
+    const totalUsers = await User.countDocuments(query);
+
+    res.status(200).json({
+      success: true,
+      totalUsers,
+      currentPage: parseInt(page),
+      totalPages: Math.ceil(totalUsers / limit),
+      users,
+    });
+  } catch (error) {
+    console.error("Error fetching users:", error);
+    next(Boom.internal("Error fetching users."));
+  }
+};
+
+// Function to get the total number of registrations based on the date range
+const GetTotalNumberOfRegistrationsByDateRange = async (req, res, next) => {
+  const { rangeType } = req.params; // e.g., 'today', 'week', 'month', 'year'
+
+  try {
+    const { start, end } = getDateRangeInPST(rangeType);
+
+    // Count the number of registrations based on the 'createdAt' field
+    const totalRegistrationsCount = await User.countDocuments({
+      createdAt: { $gte: start, $lte: end },
+    });
+
+    res.json({
+      range: rangeType,
+      totalRegistrations: totalRegistrationsCount,
+    });
+  } catch (e) {
+    next(e);
+  }
+};
+
+const getAllUsers = async (req, res, next) => {
+  try {
+    const users = await User.find().select("-password -__v"); // Exclude sensitive fields
+    res.json(users);
+  } catch (e) {
+    next(e);
+  }
 };
 
 import ChatLobby from "../../models/chatlobby.js";
@@ -964,7 +983,7 @@ const getOrCreateChatLobby = async (req, res, next) => {
     const existingLobby = await ChatLobby.findOne({
       participants: { $all: [userId1, userId2] }
     }).populate("participants", "username profile_pic firstName lastName");
-    
+
     if (existingLobby) {
       return res.status(200).json({ chatLobbyId: existingLobby.chatLobbyId });
     }
@@ -1079,9 +1098,9 @@ import Message from "../../models/Message.js";
 export const getChatMessages = async (req, res, next) => {
   try {
     const { chatLobbyId } = req.params;
-    const userId          = req.query.userId || req.payload?.user_id;
-    const page            = parseInt(req.query.page, 10) || 0;
-    const PAGE_SIZE       = 20;
+    const userId = req.query.userId || req.payload?.user_id;
+    const page = parseInt(req.query.page, 10) || 0;
+    const PAGE_SIZE = 20;
 
     if (!chatLobbyId) {
       return res.status(400).json({ message: "Chat Lobby ID is required." });
@@ -1286,8 +1305,8 @@ export const acceptFriendRequest = async (req, res, next) => {
  */
 export const rejectFriendRequest = async (req, res, next) => {
   try {
-    const { targetUserId,currentUserId } = req.body; // the user who sent the friend request
-    const requesterId =targetUserId;
+    const { targetUserId, currentUserId } = req.body; // the user who sent the friend request
+    const requesterId = targetUserId;
     if (!requesterId || !currentUserId) {
       return next(Boom.badRequest("Requester ID and current user ID are required."));
     }
@@ -1330,7 +1349,7 @@ export const rejectFriendRequest = async (req, res, next) => {
  */
 export const blockUser = async (req, res, next) => {
   try {
-    const { targetUserId,currentUserId } = req.body;
+    const { targetUserId, currentUserId } = req.body;
     if (!targetUserId || !currentUserId) {
       return next(Boom.badRequest("Target user ID and current user ID are required."));
     }
@@ -1398,29 +1417,29 @@ export const unblockUser = async (req, res, next) => {
 export const removeFriend = async (req, res, next) => {
   try {
     const { friendId, currentUserId } = req.body;
-    
+
     if (!friendId || !currentUserId) {
       return next(Boom.badRequest("Triber ID and current user ID are required."));
     }
-    
+
     // Remove friendId from current user's mytribers array.
     const currentUser = await User.findByIdAndUpdate(
       currentUserId,
       { $pull: { mytribers: friendId } },
       { new: true }
     );
-    
+
     if (!currentUser) {
       return next(Boom.notFound("Current user not found."));
     }
-    
+
     // Optionally, remove currentUserId from the friend's mytribers array.
     await User.findByIdAndUpdate(
       friendId,
       { $pull: { mytribers: currentUserId } },
       { new: true }
     );
-    
+
     res.status(200).json({
       success: true,
       message: "Triber removed successfully.",
@@ -1436,25 +1455,25 @@ export const cancelSentFriendRequest = async (req, res, next) => {
   try {
     const { targetUserId } = req.body; // the user to whom the request was sent
     const currentUserId = req.user && (req.user._id || req.user.id);
-    
+
     if (!targetUserId || !currentUserId) {
       return next(Boom.badRequest("Target user ID and current user ID are required."));
     }
-    
+
     // Remove targetUserId from current user's sentrequests.
     const sender = await User.findByIdAndUpdate(
       currentUserId,
       { $pull: { sentrequests: targetUserId } },
       { new: true }
     );
-    
+
     // Remove currentUserId from target user's requests.
     const targetUser = await User.findByIdAndUpdate(
       targetUserId,
       { $pull: { requests: currentUserId } },
       { new: true }
     );
-    
+
     res.status(200).json({
       success: true,
       message: "Sent triber request cancelled successfully.",
@@ -1474,21 +1493,21 @@ export const removeRejectedFriendRequest = async (req, res, next) => {
   try {
     const { requesterId } = req.body; // the user whose friend request was rejected and is recorded in rejectedrequests
     const currentUserId = req.user && (req.user._id || req.user.id);
-    
+
     if (!requesterId || !currentUserId) {
       return next(Boom.badRequest("Requester ID and current user ID are required."));
     }
-    
+
     const currentUser = await User.findByIdAndUpdate(
       currentUserId,
       { $pull: { rejectedrequests: requesterId } },
       { new: true }
     );
-    
+
     if (!currentUser) {
       return next(Boom.notFound("Current user not found."));
     }
-    
+
     res.status(200).json({
       success: true,
       message: "Rejected triber request removed successfully.",
@@ -1503,7 +1522,7 @@ export const removeRejectedFriendRequest = async (req, res, next) => {
 export const updateUsername = async (req, res, next) => {
   try {
     // Retrieve the current user's ID from the JWT payload.
-    const userId = req.payload?.user_id; 
+    const userId = req.payload?.user_id;
     if (!userId) {
       return res.status(401).json({ message: "User not authenticated." });
     }
@@ -1525,7 +1544,7 @@ export const updateUsername = async (req, res, next) => {
       { username: newUsername },
       { new: true, runValidators: true }
     );
-    
+
     if (!updatedUser) {
       return next(Boom.notFound("User not found."));
     }
@@ -1661,23 +1680,23 @@ export const removeUserBanner = async (req, res, next) => {
     if (!userId) {
       return res.status(401).json({ message: "User not authenticated." });
     }
-    
+
     const user = await User.findById(userId);
     if (!user) {
       return next(Boom.notFound("User not found."));
     }
-    
+
     if (!user.display_banner) {
       return res.status(400).json({ message: "No banner to remove." });
     }
-    
+
     // Delete banner from Firebase Storage
     await deleteFromFirebase(user.display_banner);
-    
+
     // Update user document by setting display_banner to null
     user.display_banner = null;
     const updatedUser = await user.save();
-    
+
     res.status(200).json({
       success: true,
       message: "Banner removed successfully.",
@@ -1698,23 +1717,23 @@ export const removeUserProfilePic = async (req, res, next) => {
     if (!userId) {
       return res.status(401).json({ message: "User not authenticated." });
     }
-    
+
     const user = await User.findById(userId);
     if (!user) {
       return next(Boom.notFound("User not found."));
     }
-    
+
     if (!user.profile_pic) {
       return res.status(400).json({ message: "No profile picture to remove." });
     }
-    
+
     // Delete profile picture from Firebase Storage
     await deleteFromFirebase(user.profile_pic);
-    
+
     // Update user document by setting profile_pic to null
     user.profile_pic = null;
     const updatedUser = await user.save();
-    
+
     res.status(200).json({
       success: true,
       message: "Profile picture removed successfully.",
@@ -1779,21 +1798,21 @@ export const joinTribe = async (req, res, next) => {
     if (!userId || !tribeId) {
       return next(Boom.badRequest("User ID and Tribe ID are required."));
     }
-    
+
     // Fetch tribe details
     const tribe = await Mytribe.findById(tribeId);
     if (!tribe) return next(Boom.notFound("Tribe not found."));
-    
+
     // Check if user is blocked from this tribe
     if (tribe.blockedUsers && tribe.blockedUsers.some(id => id.toString() === userId.toString())) {
       return next(Boom.forbidden("You are blocked from joining this tribe."));
     }
-    
+
     // Check member limit if defined (>0)
     if (tribe.membersLimit > 0 && tribe.members.length >= tribe.membersLimit) {
       return next(Boom.badRequest("Member limit reached for this tribe."));
     }
-    
+
     if (tribe.joinPolicy === "open") {
       // Direct join: update user's joined_tribes and tribe's members.
       const userUpdatePromise = User.findByIdAndUpdate(
@@ -1840,34 +1859,34 @@ export const kickUserFromTribe = async (req, res, next) => {
   try {
     const adminId = req.payload?.user_id;
     const { tribeId, targetUserId } = req.body;
-    
+
     if (!adminId || !tribeId || !targetUserId) {
       return next(Boom.badRequest("Tribe ID, target user ID and admin user ID are required."));
     }
-    
+
     // Fetch the tribe.
     const tribe = await Mytribe.findById(tribeId);
     if (!tribe) return next(Boom.notFound("Tribe not found."));
-    
+
     // Verify that the current user is an admin of the tribe.
     if (!tribe.admins.some(id => id.toString() === adminId.toString())) {
       return next(Boom.forbidden("Only tribe admins can kick users."));
     }
-    
+
     // Remove the target user from the tribe's members.
     const updatedTribe = await Mytribe.findByIdAndUpdate(
       tribeId,
       { $pull: { members: targetUserId } },
       { new: true }
     );
-    
+
     // Also remove the tribe from the target user's joined_tribes.
     await User.findByIdAndUpdate(
       targetUserId,
       { $pull: { joined_tribes: tribeId } },
       { new: true }
     );
-    
+
     res.status(200).json({
       success: true,
       message: "User kicked from tribe successfully.",
@@ -1951,7 +1970,7 @@ const deleteChatForUser = async (req, res, next) => {
       { $addToSet: { deletefor: userId } },
       { new: true }
     );
-    
+
     if (!updatedLobby) {
       return res.status(404).json({ error: "Chat lobby not found" });
     }
@@ -1984,36 +2003,36 @@ export const acceptTribeRequest = async (req, res, next) => {
     if (!adminUserId || !tribeId || !requesterId) {
       return next(Boom.badRequest("Tribe ID, requester ID, and admin user ID are required."));
     }
-    
+
     const tribe = await Mytribe.findById(tribeId);
     if (!tribe) return next(Boom.notFound("Tribe not found."));
-    
+
     // Ensure current user is an admin of this tribe.
     if (!tribe.admins.includes(adminUserId)) {
       return next(Boom.forbidden("Only tribe admins can accept join requests."));
     }
-    
+
     // Check if member limit is reached.
     if (tribe.membersLimit > 0 && tribe.members.length >= tribe.membersLimit) {
       return next(Boom.badRequest("Member limit reached for this tribe."));
     }
-    
+
     // Verify that the requester is in the tribe's requests array.
     if (!tribe.requests.includes(requesterId)) {
       return next(Boom.badRequest("No such join request exists."));
     }
-    
+
     tribe.requests.pull(requesterId);
     tribe.members.push(requesterId);
     const updatedTribe = await tribe.save();
-    
+
     // Also update the requester user's joined_tribes array.
     const updatedUser = await User.findByIdAndUpdate(
       requesterId,
       { $addToSet: { joined_tribes: tribeId } },
       { new: true }
     );
-    
+
     res.status(200).json({
       success: true,
       message: "Tribe join request accepted.",
@@ -2036,22 +2055,22 @@ export const rejectTribeRequest = async (req, res, next) => {
     if (!adminUserId || !tribeId || !requesterId) {
       return next(Boom.badRequest("Tribe ID, requester ID, and admin user ID are required."));
     }
-    
+
     const tribe = await Mytribe.findById(tribeId);
     if (!tribe) return next(Boom.notFound("Tribe not found."));
-    
+
     // Ensure current user is an admin of this tribe.
     if (!tribe.admins.includes(adminUserId)) {
       return next(Boom.forbidden("Only tribe admins can reject join requests."));
     }
-    
+
     if (!tribe.requests.includes(requesterId)) {
       return next(Boom.badRequest("No such join request exists."));
     }
-    
+
     tribe.requests.pull(requesterId);
     const updatedTribe = await tribe.save();
-    
+
     res.status(200).json({
       success: true,
       message: "Tribe join request rejected.",
@@ -2223,28 +2242,28 @@ export const getUserProfileForChecker = async (req, res, next) => {
   try {
     const { targetUserId } = req.params;
     const checkerUserId = req.payload?.user_id;
-    
+
     if (!targetUserId || !checkerUserId) {
       return next(Boom.badRequest("Both target user ID and checker user ID are required."));
     }
-    
+
     // Fetch target user and checker user
     const targetUser = await User.findById(targetUserId);
     if (!targetUser) {
       return next(Boom.notFound("Target user not found."));
     }
-    
+
     // Compute totals (defaulting to 0 if arrays are missing)
     const totalMytribers = targetUser.mytribers ? targetUser.mytribers.length : 0;
     const totalCourses = targetUser.courses ? targetUser.courses.length : 0;
     const totalTribes = targetUser.joined_tribes ? targetUser.joined_tribes.length : 0;
-    
+
     // Fetch tribe details for the joined tribes
-    const joinedTribesDetails = await Mytribe.find({ 
-      _id: { $in: targetUser.joined_tribes }, 
+    const joinedTribesDetails = await Mytribe.find({
+      _id: { $in: targetUser.joined_tribes },
       status: true // Only include tribes with status: true
     }).select('title tribeCategory _id thumbnail');  // Fetch name, category, _id, thumbnail
-    
+
     // Define minimal view fields (always visible)
     const minimalFields = {
       username: targetUser.username,
@@ -2393,40 +2412,40 @@ export const searchTribers = async (req, res, next) => {
     const regex = new RegExp(query.trim(), "i");
 
     const results = await User.aggregate([
-  {
-    $addFields: {
-      fullName: { $concat: ["$firstName", " ", "$lastName"] },
-    },
-  },
-  {
-    $match: {
-      $or: [
-        { fullName: regex },
-        { username: regex },
-      ],
-    },
-  },
-  {
-    $facet: {
-      data: [
-        {
-          $project: {
-            _id: 1,
-            firstName: 1,
-            lastName: 1,
-            username: 1,
-            title: 1,
-            profile_pic: 1,
-            display_banner: 1,
-          },
+      {
+        $addFields: {
+          fullName: { $concat: ["$firstName", " ", "$lastName"] },
         },
-        { $skip: (page - 1) * limit },
-        { $limit: limit },
-      ],
-      totalCount: [{ $count: "count" }],
-    },
-  },
-]);
+      },
+      {
+        $match: {
+          $or: [
+            { fullName: regex },
+            { username: regex },
+          ],
+        },
+      },
+      {
+        $facet: {
+          data: [
+            {
+              $project: {
+                _id: 1,
+                firstName: 1,
+                lastName: 1,
+                username: 1,
+                title: 1,
+                profile_pic: 1,
+                display_banner: 1,
+              },
+            },
+            { $skip: (page - 1) * limit },
+            { $limit: limit },
+          ],
+          totalCount: [{ $count: "count" }],
+        },
+      },
+    ]);
 
 
     const users = results[0].data;
@@ -2514,15 +2533,15 @@ export const getAllFriendRequests = async (req, res, next) => {
     const currentUserId = req.user && (req.user._id || req.user.id);
     // Also get the id provided by the client in the query parameters.
     const userIdFromQuery = req.query.userId;
-    
+
     // Populate blocked users (assume 'blockedtribers' is the field storing blocked users).
     const user = await User.findById(userIdFromQuery)
       .populate("requests", "username profile_pic");
-    
+
     if (!user) {
       return next(Boom.notFound("User not found."));
     }
-    
+
     res.status(200).json({ success: true, requests: user.requests || [] });
   } catch (error) {
     console.error("Error fetching blocked users:", error);
@@ -2647,11 +2666,11 @@ export const getChatLobby = async (req, res, next) => {
         // Return the other participant's first and last names (or null if not found)
         otherParticipant: otherParticipant
           ? {
-              _id:otherParticipant._id,
-              firstName: otherParticipant.firstName,
-              lastName: otherParticipant.lastName,
-              profile_pic:otherParticipant.profile_pic,
-            }
+            _id: otherParticipant._id,
+            firstName: otherParticipant.firstName,
+            lastName: otherParticipant.lastName,
+            profile_pic: otherParticipant.profile_pic,
+          }
           : null,
         // Optionally include messages or any other fields if needed:
         messages: lobby.messages,
@@ -2693,15 +2712,15 @@ export const getAllBlockedForUser = async (req, res, next) => {
     const currentUserId = req.user && (req.user._id || req.user.id);
     // Also get the id provided by the client in the query parameters.
     const userIdFromQuery = req.query.userId;
-    
+
     // Populate blocked users (assume 'blockedtribers' is the field storing blocked users).
     const user = await User.findById(userIdFromQuery)
       .populate("blockedtribers", "username profile_pic");
-    
+
     if (!user) {
       return next(Boom.notFound("User not found."));
     }
-    
+
     res.status(200).json({ success: true, blocked: user.blockedtribers || [] });
   } catch (error) {
     console.error("Error fetching blocked users:", error);
@@ -2715,16 +2734,16 @@ export const getTribeDetails = async (req, res, next) => {
     if (!tribeId) {
       return next(Boom.badRequest("Tribe ID is required."));
     }
-    
+
     // Find the tribe and optionally populate member/admin details if needed.
     const tribe = await Mytribe.findById(tribeId)
       .populate("members", "username profile_pic")
       .populate("admins", "username profile_pic");
-      
+
     if (!tribe) {
       return next(Boom.notFound("Tribe not found."));
     }
-    
+
     // Build the details object using only the requested fields.
     const details = {
       title: tribe.title,
@@ -2740,7 +2759,7 @@ export const getTribeDetails = async (req, res, next) => {
       joinPolicy: tribe.joinPolicy,
       membersLimit: tribe.membersLimit,
     };
-    
+
     res.status(200).json({
       success: true,
       data: details,
@@ -2850,12 +2869,12 @@ export const unblockUserFromTribe = async (req, res, next) => {
 
 
 export default {
-	Register,
-	Login,
-	RefreshToken,
-	Logout,
-	updateAddress,
-	Me,
+  Register,
+  Login,
+  RefreshToken,
+  Logout,
+  updateAddress,
+  Me,
   updateUserInfo,
   GetTotalNumberOfRegistrationsByDateRange,
   getAddress,

@@ -3,7 +3,7 @@ import Payment from "../../models/payment.js"; // if needed
 import Tools from "../../models/tools.js";
 import Courses from "../../models/courses.js";
 import Tribes from "../../models/mytribes.js";
-import Boom from "boom";
+import Boom from "@hapi/boom"; // Preferred
 
 // Get total number of courses
 const getTotalCourses = async (req, res, next) => {

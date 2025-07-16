@@ -1,6 +1,6 @@
 // controllers/news.js
 import News from "../../models/news.js";     // adjust path as needed
-import Boom from "boom";
+import Boom from "@hapi/boom"; // Preferred
 import fetch from "node-fetch";             // or omit on Node 18+
 
 // GET /news – retrieve all news documents

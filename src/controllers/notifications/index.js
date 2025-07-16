@@ -1,6 +1,6 @@
 import Notification from "../../models/notifications";
 import User from "../../models/user";
-const Boom = require("boom");
+import Boom from "@hapi/boom"; // Preferred
 
 /**
  * Send a notification to all users.

@@ -1,6 +1,6 @@
 import Tool from "../../models/tools";
 import User from "../../models/user.js";
-const Boom = require("boom");
+import Boom from "@hapi/boom"; // Preferred
 import Notification from "../../models/notifications.js";
 const { v4: uuidv4 } = require("uuid");
 const { Storage } = require("@google-cloud/storage");
@@ -157,7 +157,11 @@ export const updateTool = async (req, res, next) => {
       }
     };
     const price_heading = parseArrayField(req.body.price_heading);
-    const price         = parseArrayField(req.body.price);
+    const price = Array.isArray(req.body.price)
+      ? req.body.price
+      : req.body.price !== undefined && req.body.price !== null
+        ? [req.body.price]
+        : [];
 
     if (price_heading.length !== price.length) {
       return next(Boom.badRequest("price_heading and price must have same length."));

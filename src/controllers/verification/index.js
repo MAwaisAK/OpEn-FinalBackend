@@ -1,4 +1,4 @@
-const Boom = require('boom');
+import Boom from "@hapi/boom"; // Preferred
 import User from '../../models/user'; // Adjust path based on your directory structure
 const bcrypt = require('bcrypt');
 

@@ -2,7 +2,7 @@
 import 'dotenv/config';
 import './clients/db';
 import express from 'express';
-import Boom from 'boom';
+import Boom from "@hapi/boom"; // Preferred
 import cors from 'cors';
 import limiter from './rate-limiter';
 import routes from './routes';
@@ -22,7 +22,7 @@ const httpServer = createServer(app);
 
 const io = new Server(httpServer, {
   cors: {
-    origin: ['https://opulententrepreneurs.business','https://www.opulententrepreneurs.business'], // Allowed domain
+    origin: ['https://opulententrepreneurs.business','https://www.opulententrepreneurs.business',"http://localhost:3000"], // Allowed domain
     methods: ["GET", "POST"]
   }
 });
@@ -43,7 +43,7 @@ io.on('connection', (socket) => {
 // Make sure this is before any of your routes, including /proxy-download:
 app.use(cors({
   origin: ['https://opulententrepreneurs.business',
-           'https://www.opulententrepreneurs.business'],
+           'https://www.opulententrepreneurs.business',"http://localhost:3000"],
            methods: ["GET", "POST", "PUT", "OPTIONS","DELETE"],// include OPTIONS
   allowedHeaders: ["Origin","X-Requested-With",
                    "Content-Type","Accept","Authorization"]

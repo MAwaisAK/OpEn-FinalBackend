@@ -1,5 +1,5 @@
 import Report from '../../models/reports';
-import Boom from 'boom';
+import Boom from "@hapi/boom"; // Preferred
 
 const Create = async (req, res, next) => {
   return 0;

@@ -1,6 +1,6 @@
 import LiftAi from "../../models/lift-ai.js";
 import Price    from "../../models/price.js";
-import Boom     from "boom";
+import Boom from "@hapi/boom"; // Preferred
 import redis    from "../../clients/redis.js";
 import User     from "../../models/user.js";
 import Prompts  from "../../models/userprompts.js";
