@@ -25,12 +25,17 @@ jobs:
 
     - name: Deploy
       run: |
-        ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@138.197.174.176 "
+        ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@138.197.174.176 '
+          export NVM_DIR="$HOME/.nvm"
+          source "$NVM_DIR/nvm.sh"
+          source "$NVM_DIR/bash_completion"
+    
           cd /root/finalback
           git pull origin main
           yarn --frozen-lockfile
           yarn build
           pm2 restart finalback
-          # Add your restart commands here
-          echo 'Deployment completed!'
-        "
+    
+          echo "✅ Deployment completed!"
+        '
+
