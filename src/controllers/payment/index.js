@@ -75,7 +75,9 @@ export const createPaymentIntent = async (req, res, next) => {
   try {
     let { amount, packageType, paymentMethodId, userId, price, tokens, period, courseId, discountToken } = req.body;
     if (!amount || !paymentMethodId || !packageType || !userId) {
-      return res.status(400).json({ success: false, message: "Missing required parameters." });
+      if (!packageType === "course" && !amount === 0) {
+        return res.status(400).json({ success: false, message: "Missing required parameters." });
+      }
     }
 
     const user = await User.findById(userId);
@@ -177,55 +179,66 @@ export const createPaymentIntent = async (req, res, next) => {
       });
 
       // Attach payment method
-      await stripe.paymentMethods.attach(paymentMethodId, {
-        customer: user.stripeCustomerId
-      });
-
-      await stripe.customers.update(user.stripeCustomerId, {
-        invoice_settings: { default_payment_method: paymentMethodId }
-      });
-
-      // Create subscription
-      const subscription = await stripe.subscriptions.create({
-        customer: user.stripeCustomerId,
-        items: [{ price: priceObj.id }],
-        payment_behavior: "default_incomplete",
-        expand: ["latest_invoice.payment_intent"],
-        payment_settings: {
-          save_default_payment_method: "on_subscription"
-        }
-      });
-
-      let paymentIntent = subscription.latest_invoice?.payment_intent;
-
-      // Fallback if PI is not generated
-      if (!paymentIntent) {
-        paymentIntent = await stripe.paymentIntents.create({
-          amount,
-          currency: "usd",
+      if (amount > 0) {
+        // Attach payment method
+        await stripe.paymentMethods.attach(paymentMethodId, {
           customer: user.stripeCustomerId,
-          payment_method: paymentMethodId,
-          confirm: true,
-          automatic_payment_methods: {
-            enabled: true,
-            allow_redirects: "never"
-          },
-          metadata: {
-            packageType,
-            userId,
-            subscriptionId: subscription.id
-          }
         });
+
+        await stripe.customers.update(user.stripeCustomerId, {
+          invoice_settings: { default_payment_method: paymentMethodId },
+        });
+
+        // Create subscription
+        const subscription = await stripe.subscriptions.create({
+          customer: user.stripeCustomerId,
+          items: [{ price: priceObj.id }],
+          payment_behavior: "default_incomplete",
+          expand: ["latest_invoice.payment_intent"],
+          payment_settings: {
+            save_default_payment_method: "on_subscription",
+          },
+        });
+
+        let paymentIntent = subscription.latest_invoice?.payment_intent;
+
+        // Fallback if PI is not generated
+        if (!paymentIntent) {
+          paymentIntent = await stripe.paymentIntents.create({
+            amount,
+            currency: "usd",
+            customer: user.stripeCustomerId,
+            payment_method: paymentMethodId,
+            confirm: true,
+            automatic_payment_methods: {
+              enabled: true,
+              allow_redirects: "never",
+            },
+            metadata: {
+              packageType,
+              userId,
+              subscriptionId: subscription.id,
+            },
+          });
+        }
+
+        const validStatuses = ["requires_action", "requires_payment_method", "succeeded"];
+        if (!validStatuses.includes(paymentIntent.status)) {
+          await stripe.subscriptions.del(subscription.id);
+          return res.status(402).json({
+            success: false,
+            message: "Subscription setup failed; payment could not be processed.",
+          });
+        }
+
+        // Store subscriptionId and paymentIntent.id if needed
+      } else {
+        // For amount === 0: skip Stripe and just record "free subscription"
+        // You can still create a subscription manually in your DB if needed
+        console.log("Zero-amount subscription - skipping Stripe payment");
+        // Optional: flag subscription as trial/free in your DB
       }
 
-      const validStatuses = ["requires_action", "requires_payment_method", "succeeded"];
-      if (!validStatuses.includes(paymentIntent.status)) {
-        await stripe.subscriptions.del(subscription.id);
-        return res.status(402).json({
-          success: false,
-          message: "Subscription setup failed; payment could not be processed."
-        });
-      }
 
       // On success: record payment
       if (paymentIntent.status === "succeeded") {
@@ -270,16 +283,27 @@ export const createPaymentIntent = async (req, res, next) => {
         });
       }
 
-      return res.status(200).json({
-        success: true,
-        clientSecret: paymentIntent.client_secret,
-        paymentIntentId: paymentIntent.id,
-        requiresAction: paymentIntent.status === "requires_action",
-        message:
-          paymentIntent.status === "succeeded"
-            ? "Subscription activated successfully"
-            : "Additional authentication required to complete your subscription"
-      });
+      if (amount > 0 && paymentIntent) {
+        return res.status(200).json({
+          success: true,
+          clientSecret: paymentIntent.client_secret,
+          paymentIntentId: paymentIntent.id,
+          requiresAction: paymentIntent.status === "requires_action",
+          message:
+            paymentIntent.status === "succeeded"
+              ? "Subscription activated successfully"
+              : "Additional authentication required to complete your subscription"
+        });
+      } else {
+        return res.status(200).json({
+          success: true,
+          clientSecret: null,
+          paymentIntentId: null,
+          requiresAction: false,
+          message: "Subscription activated successfully (no payment required)"
+        });
+      }
+
     }
 
 
@@ -314,34 +338,38 @@ export const createPaymentIntent = async (req, res, next) => {
       amount = Math.round(price * 100);
 
       // Create PaymentIntent
-      const paymentIntent = await stripe.paymentIntents.create({
-        amount,
-        currency: "usd",
-        // payment_method: paymentMethodId, ❌ remove
-        // confirm: true, ❌ remove
-        metadata: {
-          packageType,
-          userId,
-          price: price.toString(),
-          tokens: tokens.toString(),
-          discount: discountToken || "none",
-        },
-      });
-
-
-      // Save payment record
       const paymentCount = await Payment.countDocuments();
       const uniquePaymentId = `P-${1000 + paymentCount + 1}`;
+
+      let paymentIntent = null;
+
+      if (amount > 0) {
+        // Create Stripe PaymentIntent ONLY if amount > 0
+        paymentIntent = await stripe.paymentIntents.create({
+          amount,
+          currency: "usd",
+          metadata: {
+            packageType,
+            userId,
+            price: price.toString(),
+            tokens: tokens.toString(),
+            discount: discountToken || "none",
+          },
+        });
+      }
+
+      // Save payment record — always
       await Payment.create({
         user: userId,
         data: packageType,
         paymentid: uniquePaymentId,
         payment: price,
-        paymentIntentId: paymentIntent.id,
+        paymentIntentId: paymentIntent?.id || "N/A",
         tokens: tokens.toString(),
         status: "paid",
         discountCode: discountToken,
       });
+
 
       // Update discount usage
       if (discountToken) {
@@ -360,11 +388,20 @@ export const createPaymentIntent = async (req, res, next) => {
         $inc: { tokens: tokens }
       });
 
-      return res.status(200).json({
-        success: true,
-        clientSecret: paymentIntent.client_secret,
-        message: "Tokens purchased successfully",
-      });
+      if (amount > 0) {
+        return res.status(200).json({
+          success: true,
+          clientSecret: paymentIntent.client_secret,
+          message: "Tokens purchased successfully",
+        });
+      } else {
+        return res.status(200).json({
+          success: true,
+          clientSecret: null, // No payment intent for zero-amount
+          message: "Tokens purchased successfully",
+        });
+      }
+
 
     }
 
@@ -396,7 +433,7 @@ export const createPaymentIntent = async (req, res, next) => {
       }
 
       // Apply coupon discount if available and valid
-      if (discount && discount.for === "tokens") {
+      if (discount && discount.for === "course") {
         price = price - (price * discount.value / 100);
       }
       price = Math.round(price * 100) / 100;
@@ -404,32 +441,39 @@ export const createPaymentIntent = async (req, res, next) => {
       tokens = 0; // No tokens for course purchases
 
       // Create PaymentIntent (same structure as tokens purchase)
-      const paymentIntent = await stripe.paymentIntents.create({
-        amount,
-        currency: "usd",
-        metadata: {
-          packageType: "course",
-          userId,
-          courseId,
-          price: price.toString(),
-          discount: discountToken || "none",
-        },
-      });
-
-      // Save payment record
       const paymentCount = await Payment.countDocuments();
       const uniquePaymentId = `P-${1000 + paymentCount + 1}`;
+
+      let paymentIntent = null;
+
+      if (amount > 0) {
+        // Create PaymentIntent ONLY if amount > 0
+        paymentIntent = await stripe.paymentIntents.create({
+          amount,
+          currency: "usd",
+          metadata: {
+            packageType: "course",
+            userId,
+            courseId,
+            price: price.toString(),
+            discount: discountToken || "none",
+          },
+        });
+      }
+
+      // Save payment record (with or without paymentIntentId)
       await Payment.create({
         user: userId,
         data: "course",
         paymentid: uniquePaymentId,
         payment: price,
-        paymentIntentId: paymentIntent.id,
+        paymentIntentId: paymentIntent?.id || "N/A",
         tokens: "0",
         course: courseId,
         status: "paid",
         discountCode: discountToken,
       });
+
 
       // Update discount usage
       if (discountToken) {
@@ -450,11 +494,20 @@ export const createPaymentIntent = async (req, res, next) => {
         $inc: { bought: 1 }
       });
 
-      return res.status(200).json({
-        success: true,
-        clientSecret: paymentIntent.client_secret,
-        message: "Course purchased successfully",
-      });
+      if (amount > 0) {
+        return res.status(200).json({
+          success: true,
+          clientSecret: paymentIntent.client_secret,
+          message: "Course purchased successfully",
+        });
+      } else {
+        return res.status(200).json({
+          success: true,
+          clientSecret: null, // No payment intent for zero-amount
+          message: "Course accessed successfully (free/premium access)",
+        });
+      }
+
     }
 
 
@@ -552,6 +605,21 @@ export const refundPayment = async (req, res, next) => {
       paymentIntentId,
       stripeSubscriptionId,
     } = payment;
+
+    console.log(payment);
+    // FREE COURSE REFUND
+    if (payment.payment === 0 && payment.data === 'course' && course) {
+      await User.findByIdAndUpdate(userId, {
+        $pull: { courses: course }
+      });
+
+      await Payment.findByIdAndUpdate(paymentId, { status: "refunded" });
+
+      return res.status(200).json({
+        success: true,
+        message: "Free course access revoked successfully (no Stripe refund needed)."
+      });
+    }
 
     // 2) Figure out PaymentIntent
     let intentToRefund = paymentIntentId;
