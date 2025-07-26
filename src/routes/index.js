@@ -33,17 +33,17 @@ router.get('/', (req, res) => {
   res.end('hey');
 });
 router.use('/auth', auth);
-router.use('/verify',verify);
-router.use('/',chat);
+router.use('/verify', verify);
+router.use('/', chat);
 router.use('/messages', messageRoutes);
 router.use('/course', courseRoutes);
 router.use('/tool', toolRoutes);
 router.use("/my-tribes", mytribes);
 router.use("/lift-ai", liftAiRoutes);
-router.use("/price", price); 
-router.use("/testimonals", testimonals); 
-router.use("/admin", admin); 
-router.use("/news", news); 
+router.use("/price", price);
+router.use("/testimonals", testimonals);
+router.use("/admin", admin);
+router.use("/news", news);
 router.use("/support", support);
 router.use("/notifications", notification);
 router.use("/subscription", subscription);
@@ -51,7 +51,7 @@ router.use("/payment", payment);
 router.use("/stats", stats);
 router.use('/categories', categories);
 router.use('/discount', discount);
-router.use('/images', images );
+router.use('/images', images);
 
 
 export default router;

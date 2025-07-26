@@ -149,6 +149,25 @@ export const updateReportStatus = async (req, res, next) => {
   }
 };
 
+export const updateReportNote = async (req, res, next) => {
+  try {
+    const { reportId, newNote } = req.body;
+    const updated = await Report.findByIdAndUpdate(
+      reportId,
+      { $set: { Note: newNote } },
+      { new: true } // return the updated report
+    );
+    if (!updated) {
+      return res.status(404).json({ message: "Report not found" });
+    }
+    res.json({ message: "Report note updated successfully.", updated });
+  } catch (error) {
+    console.error("Error updating report note:", error);
+    next(Boom.internal("Error updating report note."));
+  }
+};
+
+
 // controllers/support.js
 export const getReportsForUser = async (req, res, next) => {
   try {
@@ -203,6 +222,7 @@ export default {
   deleteReport,
   getReportById,
   getAllReports,
+  updateReportNote,
   updateReportStatus,
   getReportsForUser,
   getStatusForUser,

@@ -6,6 +6,7 @@ import {
   getReportById,
   getAllReports,
   updateReportStatus,
+  updateReportNote,
   getReportsForUser,
   getLastFourReports,
 } from "../controllers/support";
@@ -29,6 +30,14 @@ router.put(
   grantAccess("updateAny", "report"),
   updateReportStatus
 );
+
+router.put(
+  "/update-note",
+  verifyAccessToken,
+  grantAccess("updateAny", "report"),
+  updateReportNote
+);
+
 
 // Update a report by its ID
 router.put(

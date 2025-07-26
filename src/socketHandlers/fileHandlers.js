@@ -8,6 +8,7 @@ import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import ChatLobby from '../models/chatlobby';
 import { Storage } from '@google-cloud/storage';
+import redis from '../clients/redis.js';
 
 // ——————————————
 // 1) Google Cloud Storage Setup
@@ -96,6 +97,7 @@ export const registerFileHandlers = (socket, io) => {
         return callback("Invalid user ID");
       }
       const senderId = new mongoose.Types.ObjectId(user.userId);
+      const msgId = new mongoose.Types.ObjectId();
 
       // Determine file type
       const imageRegex = /\.(png|jpe?g|gif|webp)(\?.*)?$/i;
@@ -105,6 +107,7 @@ export const registerFileHandlers = (socket, io) => {
 
       // Save message
       const msgDoc = new Message({
+        _id: msgId,
         chatLobbyId: user.room,
         sender: senderId,
         message: "",
@@ -123,37 +126,38 @@ export const registerFileHandlers = (socket, io) => {
         sentAt: msgDoc.sentAt,
         isImage,
         isVideo,
+        _id: msgId.toString(),
       });
 
       let lastmsgText;
-    if (isImage) {
-      lastmsgText = "📷 Image";
-    } else if (isVideo) {
-      lastmsgText = "🎬 Video";
-    } else {
-      lastmsgText = "📎 File";
-    }
+      if (isImage) {
+        lastmsgText = "📷 Image";
+      } else if (isVideo) {
+        lastmsgText = "🎬 Video";
+      } else {
+        lastmsgText = "📎 File";
+      }
 
-    // Update the ChatLobby’s lastmsg and lastUpdated
-    ChatLobby.findOneAndUpdate(
-      { chatLobbyId: user.room },
-      {
-        $set: {
-          deletefor:   [],
-          lastmsg:     lastmsgText,
-          lastUpdated: new Date(),
-        }
-      },
-      { new: true }  // return the updated document
-    )
-    .then((updatedLobby) => {
-      io.emit('lobbyUpdated', {
-        chatLobbyId: updatedLobby.chatLobbyId,
-        lastmsg:     updatedLobby.lastmsg,
-        lastUpdated: updatedLobby.lastUpdated,
-      });
-    })
-    .catch(console.error);
+      // Update the ChatLobby’s lastmsg and lastUpdated
+      ChatLobby.findOneAndUpdate(
+        { chatLobbyId: user.room },
+        {
+          $set: {
+            deletefor: [],
+            lastmsg: lastmsgText,
+            lastUpdated: new Date(),
+          }
+        },
+        { new: true }  // return the updated document
+      )
+        .then((updatedLobby) => {
+          io.emit('lobbyUpdated', {
+            chatLobbyId: updatedLobby.chatLobbyId,
+            lastmsg: updatedLobby.lastmsg,
+            lastUpdated: updatedLobby.lastUpdated,
+          });
+        })
+        .catch(console.error);
 
       callback && callback();
     } catch (err) {
@@ -174,6 +178,7 @@ export const registerFileHandlers = (socket, io) => {
         return callback("Invalid user ID");
       }
       const senderId = new mongoose.Types.ObjectId(user.userId);
+      const msgId = new mongoose.Types.ObjectId();
 
       const imageRegex = /\.(png|jpe?g|gif|webp)(\?.*)?$/i;
       const videoRegex = /\.(mp4|mov|avi|mkv)(\?.*)?$/i;
@@ -181,6 +186,7 @@ export const registerFileHandlers = (socket, io) => {
       const isVideo = fileData.mimetype?.startsWith('video/') ?? videoRegex.test(fileData.fileUrl);
 
       const msgDoc = new TribeMessage({
+        _id: msgId,
         chatLobbyId: user.room,
         sender: senderId,
         senderUsername: user.name,
@@ -195,10 +201,12 @@ export const registerFileHandlers = (socket, io) => {
 
       io.to(user.room).emit('tribeNewFileMessage', {
         from: user.name,
+        senderId: senderId,
         url: fileData.fileUrl,
         sentAt: msgDoc.sentAt,
         isImage,
         isVideo,
+        _id: msgId.toString(),
       });
 
       callback && callback();
@@ -208,87 +216,4 @@ export const registerFileHandlers = (socket, io) => {
     }
   });
 
-  // --- Delete Message (1:1 chat) ---
- socket.on('deleteMessage', async (data, callback) => {
-    try {
-      const msg = await Message.findById(data.messageId);
-      if (!msg) return callback("Message not found");
-
-      // If it’s a file and deleteForEveryone, remove from GCS
-      if (msg.type === "file" && msg.fileUrl && data.deleteType === "forEveryone") {
-        try {
-          await deleteFromFirebase(msg.fileUrl);
-        } catch (delErr) {
-          console.error("Error deleting file from GCS:", delErr);
-        }
-      }
-
-      const chatLobbyId = msg.chatLobbyId;
-      const wasLast = true;
-      const lobby = await ChatLobby.findOne({ chatLobbyId });
-      if (lobby && lobby.lastmsg) {
-        // Compare stored lastmsg to this message
-        const compareText = msg.type === 'file'
-          ? (msg.isImage ? "📷 Image" : msg.isVideo ? "🎬 Video" : "📎 File")
-          : msg.message;
-        if (lobby.lastmsg === compareText) {
-          // It was the last message; find the previous one
-          const prev = await Message.find({ chatLobbyId })
-            .sort({ sentAt: -1 })
-            .skip(1)
-            .limit(1);
-          let newLast;
-          if (prev.length) {
-            const pm = prev[0];
-            newLast = pm.type === 'file'
-              ? (pm.isImage ? "📷 Image" : pm.isVideo ? "🎬 Video" : "📎 File")
-              : pm.message;
-          } else {
-            newLast = '';
-          }
-
-          // Update lobby
-          lobby.lastmsg = newLast;
-          lobby.lastUpdated = new Date();
-          await lobby.save();
-
-          io.emit('lobbyUpdated', {
-            chatLobbyId: lobby.chatLobbyId,
-            lastmsg:     lobby.lastmsg,
-            lastUpdated: lobby.lastUpdated,
-          });
-        }
-      }
-
-      await Message.findByIdAndDelete(data.messageId);
-      io.to(chatLobbyId).emit('messageDeleted', { messageId: data.messageId });
-      callback(null, "Message deleted");
-    } catch (err) {
-      console.error("Error deleting message:", err);
-      callback("Error deleting message");
-    }
-  });
-
-  // --- Delete Tribe Message ---
-  socket.on('deleteTribeMessage', async (data, callback) => {
-    try {
-      const msg = await TribeMessage.findById(data.messageId);
-      if (!msg) return callback("Message not found");
-
-      if (msg.type === "file" && msg.fileUrl && data.deleteType === "forEveryone") {
-        try {
-          await deleteFromFirebase(msg.fileUrl);
-        } catch (delErr) {
-          console.error("Error deleting tribe file from GCS:", delErr);
-        }
-      }
-
-      await TribeMessage.findByIdAndDelete(data.messageId);
-      io.to(msg.chatLobbyId).emit('tribeMessageDeleted', { messageId: data.messageId });
-      callback(null, "Tribe message deleted");
-    } catch (err) {
-      console.error("Error deleting tribe message:", err);
-      callback("Error deleting message");
-    }
-  });
 };

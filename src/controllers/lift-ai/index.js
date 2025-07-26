@@ -174,6 +174,39 @@ const getAllPrompts = async (req, res, next) => {
   }
 };
 
+// Reset Redis session for a specific user
+export const resetUserSession = async (userId) => {
+  try {
+    // Deleting Redis session associated with the user
+    const memKey = `ba:memory:${userId}`;
+    await redis.del(memKey);
+    console.log(`Redis session for user ${userId} has been reset.`);
+  } catch (err) {
+    console.error("Error resetting Redis session:", err);
+    throw new Error("Unable to reset session.");
+  }
+};
+
+// POST route to reset the Redis session for a user
+export const resetSession = async (req, res, next) => {
+  try {
+    const { userId } = req.body;
+    if (!userId) {
+      return next(Boom.badRequest("userId is required"));
+    }
+
+    // Call the function to reset Redis session
+    await resetUserSession(userId);
+
+    return res.status(200).json({ success: true, message: `Session for user ${userId} has been reset.` });
+  } catch (err) {
+    console.error("Error resetting session:", err);
+    return next(Boom.internal("Error resetting session", err));
+  }
+};
 
 
-export default { chat, getPrompt, updatePrompt, getUserTokens, getAllPrompts };
+
+
+
+export default { chat, getPrompt, updatePrompt, getUserTokens, getAllPrompts, resetSession };

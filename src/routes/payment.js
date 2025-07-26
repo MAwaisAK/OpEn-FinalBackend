@@ -24,6 +24,7 @@ router.put("/update-payment-status", payment.updatePaymentStatus);
 // e.g., POST /api/payments/refund-payment with JSON body { paymentId: "xxx" }
 router.post("/refund-payment", payment.refundPayment);
 router.post('/cancel', payment.cancelSubscription);
+router.post('/change-card', payment.updatePaymentMethod);
 router.post('/user-cancel', payment.cancelAnySubscription);
 router.post('/validate-discount', payment.validateDiscountRoute);
 router.post('/downgrade', payment.downgradeToBasic);

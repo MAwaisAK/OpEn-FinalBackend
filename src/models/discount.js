@@ -17,6 +17,14 @@ const DiscountSchema = new Schema({
     enum: ['tokens', 'subscription','course'],
     required: true,
   },
+  period: {
+    type: String,
+    enum: ['year', 'month'],
+  },
+  subscription: {
+    type: String,
+    enum: ['basic', 'premium'],
+  },
   numberOfUses: {
     type: Number,
     required: true,

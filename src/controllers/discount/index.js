@@ -17,7 +17,14 @@ const generateToken = () => {
 
 export const createDiscount = async (req, res, next) => {
   try {
-    const { value, for: forField, count = 1, numberOfUses = 1 } = req.body;
+    const {
+      value,
+      for: forField,
+      count = 1,
+      numberOfUses = 1,
+      subscription = "basic", // New field for subscription type
+      period = "month", // New field for period
+    } = req.body;
 
     // Validate required fields
     if (value == null || !forField) {
@@ -26,15 +33,16 @@ export const createDiscount = async (req, res, next) => {
     if (typeof value !== 'number') {
       return next(Boom.badRequest("Field `value` must be a number."));
     }
-    if (!['tokens', 'subscription','course'].includes(forField)) {
+    if (!['tokens', 'subscription', 'course'].includes(forField)) {
       return next(Boom.badRequest("Field `for` must be either 'tokens' or 'subscription'."));
     }
+
     // Validate count
     const cnt = parseInt(count, 10);
     if (isNaN(cnt) || cnt < 1 || cnt > 100) { 
-      // you can set a reasonable upper limit to prevent abuse
       return next(Boom.badRequest("Field `count` must be a positive integer (max 100)."));
     }
+
     // Validate numberOfUses
     const numUses = parseInt(numberOfUses, 10);
     if (isNaN(numUses) || numUses < 1) {
@@ -43,23 +51,17 @@ export const createDiscount = async (req, res, next) => {
 
     const createdCoupons = [];
     for (let i = 0; i < cnt; i++) {
-      // Generate unique token
       let token;
       let unique = false;
       const maxAttempts = 10;
       let attempts = 0;
       while (!unique && attempts < maxAttempts) {
         token = generateToken();
-        // Check existence
-        // eslint-disable-next-line no-await-in-loop
         const exists = await Discount.findOne({ token });
         if (!exists) unique = true;
         attempts++;
       }
       if (!unique) {
-        // If we failed to generate a unique token for this iteration, you can decide:
-        // - break and return what we have so far with a warning
-        // - or abort the whole operation
         return next(Boom.internal("Failed to generate a unique discount token. Try again."));
       }
 
@@ -67,10 +69,12 @@ export const createDiscount = async (req, res, next) => {
         value,
         token,
         for: forField,
+        subscription, // Store the subscription type
+        period, // Store the period
         numberOfUses: numUses,
-        used_by: [], // initial empty
+        used_by: [],
       });
-      // eslint-disable-next-line no-await-in-loop
+
       const saved = await discount.save();
       createdCoupons.push(saved);
     }
@@ -85,6 +89,7 @@ export const createDiscount = async (req, res, next) => {
     next(Boom.internal("Error creating discount."));
   }
 };
+
 
 /**
  * Delete a discount by ID.
@@ -126,7 +131,7 @@ export const getAllDiscounts = async (req, res, next) => {
 
 export const validateDiscount = async (req, res, next) => {
   try {
-    const { token, userId, packageType } = req.body;
+    const { token, userId, packageType, period } = req.body;
 
     if (!token) {
       return next(Boom.badRequest("Discount token is required."));
@@ -141,8 +146,10 @@ export const validateDiscount = async (req, res, next) => {
 
     // ✅ Map packageType to expected discount.for value
     let expectedDiscountFor;
+    let sub;
     if (["basic", "premium", "subscription"].includes(packageType)) {
       expectedDiscountFor = "subscription";
+      sub = packageType;
     } else if (["small", "large", "custom"].includes(packageType)) {
       expectedDiscountFor = "tokens";
     } else if (packageType === "course") {
@@ -153,7 +160,16 @@ export const validateDiscount = async (req, res, next) => {
     if (discount.for !== expectedDiscountFor) {
       return next(Boom.badRequest("This token is not applicable for the selected package type."));
     }
-
+    console.log(sub);
+    console.log(discount.subscription);
+    if(discount.subscription !== sub){
+      return next(Boom.badRequest("This token is not applicable for the selected subsciption type."));
+    }
+        console.log(period);
+    console.log(discount.period);
+    if(discount.period !== period){
+      return next(Boom.badRequest("This token is not applicable for the selected period type."));
+    }
     // Check if it has remaining uses
     if (discount.used_by.length >= discount.numberOfUses) {
       return next(Boom.badRequest("This discount has already been fully used."));

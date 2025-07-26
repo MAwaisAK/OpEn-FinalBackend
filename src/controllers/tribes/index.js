@@ -74,8 +74,8 @@ export const createMytribe = async (req, res, next) => {
     const thumbnailUrl = await handleFirebaseUpload(
       req.files.thumbnail[0], "Thumbnail", `Mytribe-${title}-thumbnail`
     );
-    const bannerUrl    = await handleFirebaseUpload(
-      req.files.banner[0],    "Banner",    `Mytribe-${title}-banner`
+    const bannerUrl = await handleFirebaseUpload(
+      req.files.banner[0], "Banner", `Mytribe-${title}-banner`
     );
 
     // 4) Create & save tribe
@@ -88,7 +88,7 @@ export const createMytribe = async (req, res, next) => {
       admins,
       members,
       thumbnail: thumbnailUrl,
-      banner:    bannerUrl,
+      banner: bannerUrl,
     });
     mytribe.tribechat = mytribe._id.toString();
     const savedMytribe = await mytribe.save();
@@ -139,7 +139,7 @@ export const updateMytribe = async (req, res, next) => {
       }
     });
 
-    updateData.admins  = admins;
+    updateData.admins = admins;
     updateData.members = members;
 
     // 4) Handle thumbnail/banner uploads
@@ -356,7 +356,7 @@ export const getUserTribesByIds = async (req, res, next) => {
       id: tribe._id,
       title: tribe.title,
       thumbnail: tribe.thumbnail,
-      tribeCategory:tribe.tribeCategory,
+      tribeCategory: tribe.tribeCategory,
     }));
 
     res.json(tribesWithDetails);
@@ -579,10 +579,10 @@ export const leaveTribe = async (req, res, next) => {
     // 2) Remove userId from tribe's members AND admins
     const updatedTribe = await Mytribe.findByIdAndUpdate(
       tribeId,
-      { 
-        $pull: { 
+      {
+        $pull: {
           members: userId,
-          admins:  userId
+          admins: userId
         }
       },
       { new: true }
@@ -593,8 +593,8 @@ export const leaveTribe = async (req, res, next) => {
 
     res.json({
       message: "Successfully left the tribe.",
-      user:    updatedUser,
-      tribe:   updatedTribe
+      user: updatedUser,
+      tribe: updatedTribe
     });
   } catch (error) {
     console.error("Error leaving tribe:", error);
@@ -769,7 +769,7 @@ export const blockUserFromTribe = async (req, res, next) => {
 
     // 3) Remove them from members AND admins, add to blockedUsers
     tribe.members = tribe.members.filter((m) => m.toString() !== userId);
-    tribe.admins  = tribe.admins.filter((a) => a.toString() !== userId);
+    tribe.admins = tribe.admins.filter((a) => a.toString() !== userId);
     if (!tribe.blockedUsers.includes(userId)) {
       tribe.blockedUsers.push(userId);
     }
@@ -782,8 +782,8 @@ export const blockUserFromTribe = async (req, res, next) => {
       return next(Boom.notFound("User not found."));
     }
     // Adjust these field names if you track them differently
-    user.joined_tribes    = user.joined_tribes.filter((t) => t.toString() !== tribeId);
-    user.blockedbytribe   = user.blockedbytribe || [];
+    user.joined_tribes = user.joined_tribes.filter((t) => t.toString() !== tribeId);
+    user.blockedbytribe = user.blockedbytribe || [];
     if (!user.blockedbytribe.includes(tribeId)) {
       user.blockedbytribe.push(tribeId);
     }
@@ -809,7 +809,7 @@ export const getUserDetails = async (req, res, next) => {
 
     // Find the user by their ID and select specific fields (_id, username, profile_pic)
     const user = await User.findById(userId).select("_id username profile_pic");
-    
+
     if (!user) {
       return next(Boom.notFound("User not found."));
     }
@@ -864,8 +864,8 @@ export const createOrGetTribeChatLobby = async (req, res, next) => {
         thumbnail: tribe.thumbnail,
         messageSettings: tribe.messageSettings,
         members: membersInfo,
-        admins:tribe.admins,
-        blockedUsers:tribe.blockedUsers,
+        admins: tribe.admins,
+        blockedUsers: tribe.blockedUsers,
       },
     });
   } catch (error) {
@@ -882,9 +882,9 @@ export const createOrGetTribeChatLobby = async (req, res, next) => {
 export const getTribeChatMessages = async (req, res, next) => {
   try {
     const { chatLobbyId } = req.params;
-    const userId     = req.query.userId || req.payload?.user_id;
-    const page       = parseInt(req.query.page, 10) || 0;
-    const PAGE_SIZE  = 20;
+    const userId = req.query.userId || req.payload?.user_id;
+    const page = parseInt(req.query.page, 10) || 0;
+    const PAGE_SIZE = 20;
 
     if (!chatLobbyId) {
       return res.status(400).json({ message: "Chat Lobby ID is required." });
@@ -901,7 +901,7 @@ export const getTribeChatMessages = async (req, res, next) => {
 
     // if there are more than PAGE_SIZE, we know there's another page
     const hasMore = docs.length > PAGE_SIZE;
-    const slice   = docs.slice(0, PAGE_SIZE).reverse();  
+    const slice = docs.slice(0, PAGE_SIZE).reverse();
     // reverse so client gets oldest→newest
 
     return res.json({
@@ -962,7 +962,7 @@ export const addAdminToTribe = async (req, res, next) => {
       User.findById(userId)
     ]);
     if (!tribe) return next(Boom.notFound("Tribe not found."));
-    if (!user)  return next(Boom.notFound("User not found."));
+    if (!user) return next(Boom.notFound("User not found."));
 
     // Add to admins (no duplicates)
     const updated = await Mytribe.findByIdAndUpdate(

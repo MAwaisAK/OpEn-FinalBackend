@@ -19,7 +19,7 @@ import {
   searchUsersTribes,
   joinTribe,
   removeAdminFromTribe,
-  removeMemberFromTribe,blockUserFromTribe,
+  removeMemberFromTribe, blockUserFromTribe,
   getTribes,
   getTribeById,
   getTribeForUser,
@@ -103,9 +103,9 @@ router.get("/user", verifyAccessToken, getTribes);
 router.get("/:mytribeId", getMytribeById);
 router.get("/user-data", verifyAccessToken, getUserDetails);
 
-router.post("/:tribeId/admins",   addAdminToTribe);
+router.post("/:tribeId/admins", addAdminToTribe);
 router.delete("/:tribeId/admins/:userId", removeAdminFromTribe);
-router.get("/:tribeId/tribers",    getTribeMembersSearch);
+router.get("/:tribeId/tribers", getTribeMembersSearch);
 
 
 router.put(

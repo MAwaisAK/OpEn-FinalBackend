@@ -6,7 +6,8 @@ import messageController from '../controllers/message/index'; // Adjust path as 
 const router = express.Router();
 
 // Existing routes.
-router.delete('/:messageId/delete-for-me', verifyAccessToken, messageController.deleteForMe);
+router.post('/:messageId/delete-for-me', verifyAccessToken, messageController.deleteForMe);
+router.post('/:messageId/delete-for-tribe', verifyAccessToken, messageController.deleteForMeTribe);
 router.delete('/:messageId/delete-for-everyone', verifyAccessToken, messageController.deleteForEveryone);
 
 // New route: mark messages as seen.

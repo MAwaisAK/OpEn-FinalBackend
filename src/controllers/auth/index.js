@@ -143,6 +143,14 @@ const Register = async (req, res, next) => {
           throw Boom.badRequest("You've already used this discount");
         }
 
+        if (discountDoc.period && discountDoc.period !== input.period) {
+          throw Boom.badRequest(`This discount is not valid for the ${input.period} period`);
+        }
+
+        if (discountDoc.plan && discountDoc.plan !== input.plan) {
+          throw Boom.badRequest(`This discount is not valid for the ${input.plan} plan`);
+        }
+
         discountValue = discountDoc.value;
       }
     }

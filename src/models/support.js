@@ -24,6 +24,10 @@ const MytriberSchema = new Schema({
     type: String,
     required: true,
   },
+  Note: {
+    type: String,
+    default:"N/A",
+  },
 }, { timestamps: true });
 
 const Mytriber = mongoose.model("support", MytriberSchema);

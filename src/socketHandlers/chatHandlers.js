@@ -10,9 +10,29 @@ import MyTribe from '../models/mytribes.js';
 import ChatLobby from '../models/chatlobby';
 import TribeChatLobby from '../models/tribechatlobby';
 import { users } from './usersInstance';
+import { Storage } from '@google-cloud/storage';
 import redis from '../clients/redis.js';
 
 const BUFFER_BATCH_SIZE = 10;
+
+const gcs = new Storage({
+  projectId: process.env.GCP_PROJECT_ID,
+});
+const bucket = gcs.bucket(process.env.GCS_BUCKET_NAME);
+
+export const deleteFromFirebase = async (publicUrl) => {
+  try {
+    const parts = publicUrl.split(`${bucket.name}/`);
+    if (parts.length !== 2) {
+      throw new Error(`Unexpected URL format: ${publicUrl}`);
+    }
+    const filePath = decodeURIComponent(parts[1]);
+    await bucket.file(filePath).delete();
+  } catch (err) {
+    console.error("GCS deletion error:", err);
+    throw new Error(`Failed to delete ${publicUrl}: ${err.message}`);
+  }
+};
 
 /**
  * Flush buffered chat messages for a room into MongoDB in bulk.
@@ -310,23 +330,39 @@ export const registerChatHandlers = (socket, io) => {
   socket.on('deleteMessage', async (data, callback) => {
     try {
       const userId = data.userId;
-      const tempKey = `chat:buffer:${data.chatLobbyId}`;
+      const messageId = data.messageId;
+      const chatLobbyId = data.chatLobbyId;
+      console.log("Received messageId:", messageId);
+
+      // Check if messageId is valid
+      if (!mongoose.Types.ObjectId.isValid(messageId)) {
+        console.log("Invalid messageId format:", messageId);
+        return callback("Invalid message ID format");
+      }
+
+      // Check Redis buffer first (for file messages too)
+      const tempKey = `chat:buffer:${chatLobbyId}`;
       const bufferItems = await redis.lrange(tempKey, 0, -1);
-      let foundInRedis = false; 
+      let foundInRedis = false;
+      let msg = null;
 
       for (const item of bufferItems) {
-        const msg = JSON.parse(item);
+        const redisMsg = JSON.parse(item);
 
         // Match by Redis message _id and senderId
-        if (msg._id === data.messageId && msg.senderId === userId) {
-          // 1️⃣ Remove from Redis buffer
+        if (redisMsg._id === messageId && redisMsg.senderId === userId) {
+          // Remove from Redis buffer
           await redis.lrem(tempKey, 1, item);
 
-          // 2️⃣ Update the ChatLobby’s last message to “deleted”
+          // Set foundInRedis flag and assign to msg
+          foundInRedis = true;
+          msg = redisMsg;
+
+          // Update the ChatLobby’s last message to “deleted”
           const deletedText = '<i>*Message Deleted*</i>';
           const now = new Date();
           const updatedLobby = await ChatLobby.findOneAndUpdate(
-            { chatLobbyId: data.chatLobbyId },
+            { chatLobbyId: chatLobbyId },
             {
               $set: {
                 lastmsg: deletedText,
@@ -337,75 +373,95 @@ export const registerChatHandlers = (socket, io) => {
             { new: true }
           );
 
-          // 3️⃣ Broadcast both lobby update and message deletion
+          // Broadcast both lobby update and message deletion
           io.emit('lobbyUpdated', {
             chatLobbyId: updatedLobby.chatLobbyId,
             lastmsg: updatedLobby.lastmsg,
-            lastmsgid: updatedLobby.lastmsgid,
             lastUpdated: updatedLobby.lastUpdated,
           });
-          io.to(data.chatLobbyId).emit('messageDeleted', {
+          io.to(chatLobbyId).emit('messageDeleted', {
             messageId: msg._id,
-            timestamp: msg.timestamp
+            timestamp: msg.sentAt // Or use msg.timestamp if available
           });
-          foundInRedis = true;
-          // 4️⃣ Finish
+
+          // If file message, delete the file from GCS
+          if (msg.type === "file" && msg.fileUrl) {
+            try {
+              // Assuming deleteFromFirebase deletes a file from Google Cloud Storage (GCS)
+              await deleteFromFirebase(msg.fileUrl);
+              console.log(`File deleted from GCS: ${msg.fileUrl}`);
+            } catch (delErr) {
+              console.error("Error deleting file from GCS:", delErr);
+            }
+          }
+
+          // Finish and return
           return callback(null, 'Message deleted from Redis buffer');
         }
       }
 
-      if (foundInRedis) return callback(null, "Message deleted from Redis buffer");
-
       // If not found in Redis, try MongoDB
-      const msg = await Message.findById(data.messageId);
-      if (!msg) return callback("Message not found");
+      if (!foundInRedis) {
+        console.log("Redis buffer not found, checking MongoDB...");
 
-      // Enforce deletion rules
-      if (data.deleteType === "forEveryone") {
-        const messageAge = moment().diff(moment(msg.sentAt), "minutes");
-        if (messageAge >= 7) return callback("Deletion time window expired");
-      }
-
-      // Optional file deletion (if file type)
-      if (msg.type === "file" && msg.fileUrl && data.deleteType === "forEveryone") {
-        try {
-          const urlObj = new URL(msg.fileUrl);
-          const encodedFileName = urlObj.pathname.split('/o/')[1];
-          const fileName = decodeURIComponent(encodedFileName.split('?')[0]);
-          await bucket.file(fileName).delete();
-        } catch (fileDelErr) {
-          console.error("Error deleting file from Firebase:", fileDelErr);
+        // Try fetching from MongoDB
+        msg = await Message.findById(messageId);
+        if (!msg) {
+          console.log("Message not found in DB:", messageId);
+          return callback("Message not found");
         }
-      }
 
-      // Update chat lobby last message
-      const deletedText = "<i>*Message Deleted*</i>";
-      const now = new Date();
-      const updated = await ChatLobby.findOneAndUpdate(
-        { chatLobbyId: msg.chatLobbyId },
-        {
-          $set: {
-            lastmsg: deletedText,
-            lastmsgid: null,
-            lastUpdated: now,
+        // Enforce deletion rules for "forEveryone" deletion type (applies to file messages too)
+        if (data.deleteType === "forEveryone") {
+          const messageAge = moment().diff(moment(msg.sentAt), "minutes");
+          if (messageAge >= 7) {
+            return callback("Deletion time window expired");
           }
-        },
-        { new: true }
-      );
+        }
 
-      // Notify all clients
-      io.emit('lobbyUpdated', {
-        chatLobbyId: updated.chatLobbyId,
-        lastmsg: updated.lastmsg,
-        lastmsgid: updated.lastmsgid,
-        lastUpdated: updated.lastUpdated,
-      });
+        // Optional file deletion (if file type and deleteType is "forEveryone")
+        if (msg.type === "file" && msg.fileUrl && data.deleteType === "forEveryone") {
+          try {
+            // Assuming deleteFromFirebase deletes a file from Google Cloud Storage (GCS)
+            await deleteFromFirebase(msg.fileUrl);
+            console.log(`File deleted from GCS: ${msg.fileUrl}`);
+          } catch (delErr) {
+            console.error("Error deleting file from GCS:", delErr);
+          }
+        }
 
-      // Final delete
-      await Message.findByIdAndDelete(data.messageId);
-      io.to(msg.chatLobbyId).emit('messageDeleted', { messageId: data.messageId });
+        // Update chat lobby last message to "deleted"
+        const deletedText = "<i>*Message Deleted*</i>";
+        const now = new Date();
+        const updated = await ChatLobby.findOneAndUpdate(
+          { chatLobbyId: msg.chatLobbyId },
+          {
+            $set: {
+              lastmsg: deletedText,
+              lastmsgid: null,
+              lastUpdated: now,
+            }
+          },
+          { new: true }
+        );
 
-      callback(null, "Message deleted from MongoDB");
+        // Notify all clients of the lobby update
+        io.emit('lobbyUpdated', {
+          chatLobbyId: updated.chatLobbyId,
+          lastmsg: updated.lastmsg,
+          lastmsgid: updated.lastmsgid,
+          lastUpdated: updated.lastUpdated,
+        });
+
+        // Final delete from MongoDB
+        await Message.findByIdAndDelete(messageId);
+
+        // Notify clients in the chat lobby that the message has been deleted
+        io.to(msg.chatLobbyId).emit('messageDeleted', { messageId: messageId });
+
+        // Finish
+        callback(null, "Message deleted from MongoDB");
+      }
     } catch (err) {
       console.error("Error deleting message:", err);
       callback("Error deleting message");
@@ -414,39 +470,29 @@ export const registerChatHandlers = (socket, io) => {
 
 
 
+
+
   // — DELETE tribe message —
   socket.on('deleteTribeMessage', async (data, callback) => {
     try {
-      const { room, userId, messageId, deleteType } = data;
-      const user = users.getUser(socket.id);
-      if (!user) return callback('Not authorized');
+      const msg = await TribeMessage.findById(data.messageId);
+      if (!msg) return callback("Message not found");
 
-      // 1) Check admin status
-      const tribe = await MyTribe.findOne({ chatLobbyId: room }).select('admins');
-      const isAdmin = tribe?.admins
-        .map((id) => id.toString())
-        .includes(user.userId);
-
-      // 2) Load from DB
-      const msg = await TribeMessage.findById(messageId);
-      if (!msg) return callback('Message not found');
-
-      // 3) Enforce 7-minute window for non-admins
-      if (!isAdmin && deleteType === 'forEveryone') {
-        const ageMin = moment().diff(moment(msg.sentAt), 'minutes');
-        if (ageMin >= 7) return callback('Deletion window expired');
+      if (msg.type === "file" && msg.fileUrl && data.deleteType === "forEveryone") {
+        try {
+          await deleteFromFirebase(msg.fileUrl);
+          console.log(`File deleted from GCS: ${msg.fileUrl}`);
+        } catch (delErr) {
+          console.error("Error deleting tribe file from GCS:", delErr);
+        }
       }
 
-      // 4) (Optional) delete file from storage if msg.type === 'file'
-
-      // 5) Remove and broadcast
-      await msg.deleteOne();
-      io.to(room).emit('messageDeleted', { messageId });
-
-      callback(null, 'Deleted');
+      await TribeMessage.findByIdAndDelete(data.messageId);
+      io.to(msg.chatLobbyId).emit('tribeMessageDeleted', { messageId: data.messageId });
+      callback(null, "Tribe message deleted");
     } catch (err) {
-      console.error('deleteTribeMessage error:', err);
-      callback('Server error');
+      console.error("Error deleting tribe message:", err);
+      callback("Error deleting message");
     }
   });
 };

@@ -8,34 +8,43 @@ import Course from "../../models/courses";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-export const validateDiscount = async (token, packageType, userId) => {
+export const validateDiscount = async (token, packageType, userId, period) => {
   try {
-    // 1) find the discount
+    // 1) Find the discount from the database
     const discount = await Discount.findOne({ token: token.trim().toUpperCase() });
     if (!discount) {
-      return res.status(404).json({ success: false, message: "Discount code not found" });
+      throw new Error("Discount code not found");
     }
 
-    // 2) ensure it's valid for this package
+    // 2) Ensure it's valid for this package
     const wantsTokens = ["small", "large", "custom"].includes(packageType);
     const wantsSubs = ["basic", "premium"].includes(packageType);
     const wantsCourse = ["course"].includes(packageType);
     const validTokens = discount.for === "tokens" && wantsTokens;
     const validSubs = discount.for === "subscription" && wantsSubs;
     const validCourse = discount.for === "course" && wantsCourse;
+
     if (!validTokens && !validSubs && !validCourse) {
-      return res.status(400).json({ success: false, message: "Not valid for this package type" });
+      throw new Error("Not valid for this package type");
     }
 
-    // 3) check usage limits
+    if (discount.for === "subscription" && discount.subscription !== packageType) {
+      throw new Error("Not valid for this subscription type");
+    }
+
+    if (discount.for === "subscription" && discount.period !== period) {
+      throw new Error("Not valid for this period type");
+    }
+
+    // 3) Check usage limits
     if (discount.used_by.includes(userId)) {
-      return res.status(400).json({ success: false, message: "You’ve already used this code" });
+      throw new Error("You’ve already used this code");
     }
     if (discount.used_by.length >= discount.numberOfUses) {
-      return res.status(400).json({ success: false, message: "No remaining uses" });
+      throw new Error("No remaining uses");
     }
 
-    // 4) success — send back the whole discount object
+    // 4) Return the discount object if all checks pass
     return {
       value: discount.value,
       token: discount.token,
@@ -43,17 +52,20 @@ export const validateDiscount = async (token, packageType, userId) => {
     };
 
   } catch (err) {
-    console.error("discount validation error:", err);
-    return res.status(500).json({ success: false, message: "Server error validating discount" });
+    throw new Error(err.message || "Server error validating discount");
   }
 };
 
 
 // Discount validation route
+// Discount validation route
 export const validateDiscountRoute = async (req, res, next) => {
   try {
-    const { token, packageType, userId } = req.body;
-    const discount = await validateDiscount(token, packageType, userId);
+    const { token, packageType, userId, period } = req.body;
+
+    // Call validateDiscount and handle response in this route
+    const discount = await validateDiscount(token, packageType, userId, period);
+
     return res.status(200).json({
       success: true,
       discount: {
@@ -62,13 +74,15 @@ export const validateDiscountRoute = async (req, res, next) => {
         for: discount.for
       }
     });
+
   } catch (error) {
     return res.status(400).json({
       success: false,
-      message: error.message
+      message: error.message || "An error occurred"
     });
   }
 };
+
 
 // Main payment function
 export const createPaymentIntent = async (req, res, next) => {
@@ -89,7 +103,7 @@ export const createPaymentIntent = async (req, res, next) => {
     let discount = null;
     if (discountToken) {
       try {
-        discount = await validateDiscount(discountToken, packageType, userId);
+        discount = await validateDiscount(discountToken, packageType, userId,period);
       } catch (error) {
         return res.status(400).json({ success: false, message: error.message });
       }
@@ -149,7 +163,7 @@ export const createPaymentIntent = async (req, res, next) => {
       }
 
       // Apply discount if applicable
-      if (discount && discount.for === "subscription") {
+      if (discount && discount.for === "subscription" && discount.subscription === packageType && discount.period ===period) {
         price = price - (price * discount.value) / 100;
         price = Math.round(price * 100) / 100;
       }
@@ -179,130 +193,139 @@ export const createPaymentIntent = async (req, res, next) => {
       });
 
       // Attach payment method
-      if (amount > 0) {
-        // Attach payment method
-        await stripe.paymentMethods.attach(paymentMethodId, {
-          customer: user.stripeCustomerId,
-        });
+if (amount > 0) {
+  // Attach payment method
+  await stripe.paymentMethods.attach(paymentMethodId, {
+    customer: user.stripeCustomerId,
+  });
 
-        await stripe.customers.update(user.stripeCustomerId, {
-          invoice_settings: { default_payment_method: paymentMethodId },
-        });
+  await stripe.customers.update(user.stripeCustomerId, {
+    invoice_settings: { default_payment_method: paymentMethodId },
+  });
 
-        // Create subscription
-        const subscription = await stripe.subscriptions.create({
-          customer: user.stripeCustomerId,
-          items: [{ price: priceObj.id }],
-          payment_behavior: "default_incomplete",
-          expand: ["latest_invoice.payment_intent"],
-          payment_settings: {
-            save_default_payment_method: "on_subscription",
-          },
-        });
+  // Create subscription
+  const subscription = await stripe.subscriptions.create({
+    customer: user.stripeCustomerId,
+    items: [{ price: priceObj.id }],
+    payment_behavior: "default_incomplete",
+    expand: ["latest_invoice.payment_intent"],
+    payment_settings: {
+      save_default_payment_method: "on_subscription",
+    },
+  });
 
-        let paymentIntent = subscription.latest_invoice?.payment_intent;
+  // Try to get payment intent from subscription
+  let paymentIntent = subscription.latest_invoice?.payment_intent;
 
-        // Fallback if PI is not generated
-        if (!paymentIntent) {
-          paymentIntent = await stripe.paymentIntents.create({
-            amount,
-            currency: "usd",
-            customer: user.stripeCustomerId,
-            payment_method: paymentMethodId,
-            confirm: true,
-            automatic_payment_methods: {
-              enabled: true,
-              allow_redirects: "never",
-            },
-            metadata: {
-              packageType,
-              userId,
-              subscriptionId: subscription.id,
-            },
-          });
-        }
+  // Fallback if paymentIntent is not generated
+  if (!paymentIntent) {
+    paymentIntent = await stripe.paymentIntents.create({
+      amount,
+      currency: "usd",
+      customer: user.stripeCustomerId,
+      payment_method: paymentMethodId,
+      confirm: true,
+      automatic_payment_methods: {
+        enabled: true,
+        allow_redirects: "never",
+      },
+      metadata: {
+        packageType,
+        userId,
+        subscriptionId: subscription.id,
+      },
+    });
+  }
 
-        const validStatuses = ["requires_action", "requires_payment_method", "succeeded"];
-        if (!validStatuses.includes(paymentIntent.status)) {
-          await stripe.subscriptions.del(subscription.id);
-          return res.status(402).json({
-            success: false,
-            message: "Subscription setup failed; payment could not be processed.",
-          });
-        }
+  // Ensure we have a valid payment intent
+  const validStatuses = ["requires_action", "requires_payment_method", "succeeded"];
+  if (!validStatuses.includes(paymentIntent.status)) {
+    // Cancel subscription if payment failed
+    await stripe.subscriptions.del(subscription.id);
+    return res.status(402).json({
+      success: false,
+      message: "Subscription setup failed; payment could not be processed.",
+    });
+  }
 
-        // Store subscriptionId and paymentIntent.id if needed
-      } else {
-        // For amount === 0: skip Stripe and just record "free subscription"
-        // You can still create a subscription manually in your DB if needed
-        console.log("Zero-amount subscription - skipping Stripe payment");
-        // Optional: flag subscription as trial/free in your DB
-      }
+  // On success: record payment if paymentIntent is succeeded
+  if (paymentIntent.status === "succeeded") {
+    const paymentCount = await Payment.countDocuments();
+    const uniquePaymentId = `P-${1000 + paymentCount + 1}`;
 
+    await Payment.create({
+      user: userId,
+      data: packageType,
+      paymentid: uniquePaymentId,
+      payment: price,
+      tokens: tokens.toString(),
+      status: "paid",
+      period,
+      stripeSubscriptionId: subscription.id,
+      discountCode: discountToken,
+    });
 
-      // On success: record payment
-      if (paymentIntent.status === "succeeded") {
-        const paymentCount = await Payment.countDocuments();
-        const uniquePaymentId = `P-${1000 + paymentCount + 1}`;
+    if (discount) {
+      discount.used_by.push(userId);
+      discount.usesCount += 1;
+      await discount.save();
+    }
 
-        await Payment.create({
-          user: userId,
-          data: packageType,
-          paymentid: uniquePaymentId,
-          payment: price,
-          tokens: tokens.toString(),
-          status: "paid",
-          period,
-          stripeSubscriptionId: subscription.id,
-          discountCode: discountToken
-        });
+    // Calculate next billing date
+    let nextBillingDate = new Date();
+    if (interval === "month") {
+      nextBillingDate.setMonth(nextBillingDate.getMonth() + 1);
+    } else if (interval === "year") {
+      nextBillingDate.setFullYear(nextBillingDate.getFullYear() + 1);
+    }
 
-        if (discount) {
-          discount.used_by.push(userId);
-          discount.usesCount += 1;
-          await discount.save();
-        }
+    // Update user subscription info
+    await User.findByIdAndUpdate(userId, {
+      subscription: packageType,
+      period,
+      subscribed_At: new Date(),
+      stripeSubscriptionId: subscription.id,
+      nextBillingDate,
+      $inc: { tokens },
+      trial_used: true,
+    });
+  }
 
-        // Calculate next billing date
-        let nextBillingDate = new Date();
-        if (interval === "month") {
-          nextBillingDate.setMonth(nextBillingDate.getMonth() + 1);
-        } else if (interval === "year") {
-          nextBillingDate.setFullYear(nextBillingDate.getFullYear() + 1);
-        }
+  // Return response with payment intent information
+  return res.status(200).json({
+    success: true,
+    clientSecret: paymentIntent.client_secret,
+    paymentIntentId: paymentIntent.id,
+    requiresAction: paymentIntent.status === "requires_action",
+    message:
+      paymentIntent.status === "succeeded"
+        ? "Subscription activated successfully"
+        : "Additional authentication required to complete your subscription",
+  });
+} else {
+  // For zero-amount subscription (free or trial)
+  console.log("Zero-amount subscription - skipping Stripe payment");
 
-        // Update user subscription info
-        await User.findByIdAndUpdate(userId, {
-          subscription: packageType,
-          period,
-          subscribed_At: new Date(),
-          stripeSubscriptionId: subscription.id,
-          nextBillingDate,
-          $inc: { tokens },
-          trial_used: true
-        });
-      }
+  // Create subscription without payment intent
+  const subscription = await stripe.subscriptions.create({
+    customer: user.stripeCustomerId,
+    items: [{ price: priceObj.id }],
+    payment_behavior: "default_incomplete",
+    payment_settings: {
+      save_default_payment_method: "on_subscription",
+    },
+  });
 
-      if (amount > 0 && paymentIntent) {
-        return res.status(200).json({
-          success: true,
-          clientSecret: paymentIntent.client_secret,
-          paymentIntentId: paymentIntent.id,
-          requiresAction: paymentIntent.status === "requires_action",
-          message:
-            paymentIntent.status === "succeeded"
-              ? "Subscription activated successfully"
-              : "Additional authentication required to complete your subscription"
-        });
-      } else {
-        return res.status(200).json({
-          success: true,
-          clientSecret: null,
-          paymentIntentId: null,
-          requiresAction: false,
-          message: "Subscription activated successfully (no payment required)"
-        });
-      }
+  // No need for payment intent in case of free subscription
+  return res.status(200).json({
+    success: true,
+    clientSecret: null,
+    paymentIntentId: null,
+    requiresAction: false,
+    message: "Subscription activated successfully (no payment required)",
+  });
+}
+
 
     }
 
@@ -914,6 +937,42 @@ export const downgradeToBasic = async (req, res) => {
   }
 };
 
+// Server-side (Node.js/Express)
+export const updatePaymentMethod = async (req, res, next) => {
+  const { userId, paymentMethodId } = req.body;
+
+  try {
+    const user = await User.findById(userId);
+    if (!user) {
+      return next(Boom.notFound("User not found"));
+    }
+
+    const stripeCustomerId = user.stripeCustomerId;
+    if (!stripeCustomerId) {
+      return next(Boom.badRequest("Stripe customer ID not found"));
+    }
+
+    // Attach the new payment method to the Stripe customer
+    await stripe.paymentMethods.attach(paymentMethodId, {
+      customer: stripeCustomerId
+    });
+
+    // Update the user's default payment method
+    await stripe.customers.update(stripeCustomerId, {
+      invoice_settings: { default_payment_method: paymentMethodId }
+    });
+
+    // Update user record with new payment method ID
+    user.stripePaymentMethodId = paymentMethodId;
+    await user.save();
+
+    res.json({ success: true, message: 'Payment method updated' });
+  } catch (error) {
+    next(Boom.isBoom(error) ? error : Boom.badImplementation(error.message));
+  }
+};
+
+
 
 export default {
   createPaymentIntent,
@@ -926,4 +985,5 @@ export default {
   validateDiscountRoute,
   cancelAnySubscription,
   downgradeToBasic,
+  updatePaymentMethod,
 };
