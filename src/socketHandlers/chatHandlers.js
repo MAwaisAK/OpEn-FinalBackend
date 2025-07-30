@@ -495,4 +495,27 @@ export const registerChatHandlers = (socket, io) => {
       callback("Error deleting message");
     }
   });
+
+  // Listen for typing event
+socket.on('typing', (data) => {
+  const user = users.getUser(socket.id);
+  if (user) {
+    // Emit to everyone in the room that the user is typing
+    socket.to(user.room).emit('userTyping', {
+      userId: user.userId,
+    });
+  }
+});
+
+// Listen for stopTyping event
+socket.on('stopTyping', (data) => {
+  const user = users.getUser(socket.id);
+  if (user) {
+    // Emit to everyone in the room that the user has stopped typing
+    socket.to(user.room).emit('userStoppedTyping', {
+      userId: user.userId,
+    });
+  }
+});
+
 };

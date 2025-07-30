@@ -226,7 +226,7 @@ export async function handleUserInput(userId, userInput) {
 
     if (!lastTemplate) {
       memory.state.awaitingDownloadFormat = false;
-      await redis.set(memKey, JSON.stringify(memory));
+      await redis.setex(memKey,3600, JSON.stringify(memory));
       return "Could not find template content to download. Please restart your process.";
     }
 
@@ -246,7 +246,7 @@ export async function handleUserInput(userId, userInput) {
     memory.messages.push({ role: "assistant", content: downloadMsg });
     memory.state.awaitingDownloadFormat = false;
     memory.state.templateRendered = false;
-    await redis.set(memKey, JSON.stringify(memory));
+    await redis.setex(memKey,3600, JSON.stringify(memory));
 
     return downloadMsg;
   }
@@ -298,7 +298,7 @@ export async function handleUserInput(userId, userInput) {
           <a href="${downloadUrl}" target="_blank"><b>${formatName}</b></a>`;
 
         memory.messages.push({ role: "assistant", content: downloadMsg });
-        await redis.set(memKey, JSON.stringify(memory));
+        await redis.setex(memKey, 3600,JSON.stringify(memory));
         return downloadMsg;
       }
     }
@@ -329,7 +329,7 @@ export async function handleUserInput(userId, userInput) {
           content: JSON.stringify(files)
         });
 
-        await redis.set(memKey, JSON.stringify(memory));
+        await redis.setex(memKey,3600, JSON.stringify(memory));
         return downloadMsg;
       }
       return "Please complete the analysis before requesting a download.";
@@ -363,7 +363,7 @@ export async function handleUserInput(userId, userInput) {
         content: JSON.stringify(files)
       });
 
-      await redis.set(memKey, JSON.stringify(memory));
+      await redis.setex(memKey,3600, JSON.stringify(memory));
       return downloadMsg;
     }
 
@@ -389,7 +389,7 @@ export async function handleUserInput(userId, userInput) {
     // Handle normal assistant reply
     const htmlReply = htmlify(finalReply);
     memory.messages.push({ role: "assistant", content: finalReply });
-    await redis.set(memKey, JSON.stringify(memory));
+    await redis.setex(memKey,3600, JSON.stringify(memory));
     return htmlReply;
   } catch (err) {
     const isQuotaError = err?.message?.includes("InsufficientQuotaError");

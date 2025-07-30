@@ -1,5 +1,6 @@
 import Boom from "@hapi/boom"; // Preferred
 import User from "../../models/user";
+import mongoose from 'mongoose';
 import Admin from "../../models/admin.js";
 import Price from "../../models/price";
 import Mytribe from "../../models/mytribes.js";
@@ -1103,6 +1104,39 @@ const createChatLobby = async (req, res, next) => {
 
 import Message from "../../models/Message.js";
 
+async function flushChatBuffer(room) {
+  const key = `chat:buffer:${room}`;
+  const items = await redis.lrange(key, 0, -1);
+  if (!items.length) return;
+
+  const docs = items.map((raw) => {
+    const p = JSON.parse(raw);
+    return {
+      chatLobbyId: room,
+      sender: new mongoose.Types.ObjectId(p.senderId),
+      message: p.text,
+      type: 'text',
+      seen: false,
+      sentAt: new Date(p.timestamp),
+    };
+  });
+
+  try {
+    await Message.insertMany(docs);
+    // clear deletefor once per batch
+    await ChatLobby.findOneAndUpdate(
+      { chatLobbyId: room },
+      { $set: { deletefor: [] } }
+    );
+  } catch (err) {
+    console.error('Error bulk‐inserting chat buffer for room', room, err);
+    // leave the buffer intact for retry
+    return;
+  }
+
+  await redis.del(key);
+}
+
 export const getChatMessages = async (req, res, next) => {
   try {
     const { chatLobbyId } = req.params;
@@ -1114,7 +1148,10 @@ export const getChatMessages = async (req, res, next) => {
       return res.status(400).json({ message: "Chat Lobby ID is required." });
     }
 
-    // fetch newest first, +1 extra to check for more
+    // 1. Flush the buffered messages from Redis to MongoDB
+    await flushChatBuffer(chatLobbyId);
+
+    // 2. Fetch the chat messages from MongoDB
     const docs = await Message.find({
       chatLobbyId,
       deletedFor: { $ne: userId },
@@ -1125,9 +1162,9 @@ export const getChatMessages = async (req, res, next) => {
       .populate("sender", "username")
       .lean();
 
-    // if we got more than PAGE_SIZE, there's another page
+    // 3. If we got more than PAGE_SIZE, there's another page
     const hasMore = docs.length > PAGE_SIZE;
-    // trim off the extra record, then reverse so client sees oldest→newest order
+    // Trim off the extra record, then reverse so client sees oldest→newest order
     const messages = docs.slice(0, PAGE_SIZE).reverse();
 
     return res.json({ messages, hasMore });
