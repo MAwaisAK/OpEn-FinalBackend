@@ -9,9 +9,11 @@ router.post('/uploadmsg', upload.single('file'), async (req, res) => {
   }
   try {
     const fileUrl = await uploadFileToFirebase(req.file);
+    console.log(req.body.caption);
     res.json({
       message: 'File uploaded successfully',
       file: req.file.originalname,
+      caption:req.body.caption,
       fileUrl
     });
   } catch (error) {

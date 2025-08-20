@@ -6,7 +6,6 @@ import Message from '../models/Message';
 import TribeMessage from '../models/TribeMessage';
 import Notification from '../models/notifications';
 import User from '../models/user';
-import MyTribe from '../models/mytribes.js';
 import ChatLobby from '../models/chatlobby';
 import TribeChatLobby from '../models/tribechatlobby';
 import { users } from './usersInstance';
@@ -120,7 +119,6 @@ export const registerChatHandlers = (socket, io) => {
     io.to(params.room).emit('updateUserList', users.getUserList(params.room));
     callback();
   });
-
   socket.on('createMessage', async (message, callback) => {
     const user = users.getUser(socket.id);
     if (!(user && isRealString(message.text))) {
@@ -128,48 +126,59 @@ export const registerChatHandlers = (socket, io) => {
       return callback();
     }
 
-    const tempKey = `chat:buffer:${user.room}`;
+    // Validate and convert reply fields if provided
+    let replyIdObj = null;
+    let replyUserIdObj = null;
+    if (message.reply_id && mongoose.Types.ObjectId.isValid(message.reply_id)) {
+      replyIdObj = new mongoose.Types.ObjectId(message.reply_id);
+    }
+    if (message.reply_userid && mongoose.Types.ObjectId.isValid(message.reply_userid)) {
+      replyUserIdObj = new mongoose.Types.ObjectId(message.reply_userid);
+    }
 
-    // 1️⃣ Generate an ObjectId for both MongoDB and Redis
-    const msgId = new mongoose.Types.ObjectId();
     const timestamp = Date.now();
+    const msgId = new mongoose.Types.ObjectId();
 
-    const buf = {
-      _id: msgId.toString(),  // include msgId in Redis for traceability
-      senderId: user.userId,
-      senderName: user.name,
-      text: message.text,
-      timestamp, // keep as number (UNIX ms)
-    };
-
-    await redis.rpush(tempKey, JSON.stringify(buf));
-    await redis.expire(tempKey, 3600); // optional: expire after 1 hour
-
-    // 2️⃣ Immediate broadcast to room
-    io.to(user.room).emit('newMessage', {
-      _id: msgId.toString(),
-      text: message.text,
-      from: user.name,
-      sentAt: new Date(timestamp),
-      seen: false,
-      type: 'text',
-      senderId: user.userId,
+    // Create the message document and save it to MongoDB
+    const newMsg = new Message({
       chatLobbyId: user.room,
+      sender: user.userId,
+      message: message.text,
+      sentAt: new Date(timestamp),
+      type: 'text',
+      reply_id: replyIdObj,
+      reply_userid: replyUserIdObj,
+      reply: message.reply || "",
+      reply_username: message.reply_username || "",
+      reply_media: message.reply_media,
     });
 
-    // 3️⃣ Persist to MongoDB
     try {
-      const newMsg = {
-        _id: msgId, // use same ObjectId
-        sender: user.userId,
-        message: message.text,
-        sentAt: new Date(timestamp),
-      };
+      // Save the message to MongoDB
+      await newMsg.save();
 
+      // Broadcast the new message to the room after it's saved in MongoDB
+      io.to(user.room).emit('newMessage', {
+        _id: newMsg._id.toString(),  // Use the MongoDB _id for the new message
+        text: message.text,
+        from: user.name,
+        sentAt: new Date(timestamp),
+        seen: false,
+        type: 'text',
+        senderId: user.userId,
+        chatLobbyId: user.room,
+        reply_id: message.reply_id ? message.reply_id.toString() : null,
+        reply_userid: message.reply_userid ? message.reply_userid.toString() : null,
+        reply: message.reply || "",
+        reply_username: message.reply_username || "",
+        reply_media: message.reply_media,
+      });
+
+      // Update the chat lobby with the new message
       const updatedLobby = await ChatLobby.findOneAndUpdate(
         { chatLobbyId: user.room },
         {
-          $push: { messages: newMsg },
+          $push: { messages: newMsg._id },
           $set: {
             deletefor: [],
             lastmsg: newMsg.message,
@@ -180,6 +189,7 @@ export const registerChatHandlers = (socket, io) => {
         { new: true }
       );
 
+      // Broadcast the updated lobby to all connected clients
       io.emit('lobbyUpdated', {
         chatLobbyId: updatedLobby.chatLobbyId,
         lastmsg: updatedLobby.lastmsg,
@@ -188,10 +198,11 @@ export const registerChatHandlers = (socket, io) => {
       });
 
     } catch (err) {
-      console.error("Error updating ChatLobby:", err);
+      console.error("Error saving message to MongoDB:", err);
+      callback('Error saving message');
     }
 
-    // 4️⃣ Send notifications
+    // Send notifications
     ChatLobby.findOne({ chatLobbyId: user.room })
       .then((lobby) => {
         if (!lobby?.participants) return;
@@ -213,16 +224,78 @@ export const registerChatHandlers = (socket, io) => {
       })
       .catch(console.error);
 
-    // 5️⃣ Conditional flush if buffer exceeds threshold
-    const len = await redis.llen(tempKey);
-    if (len >= BUFFER_BATCH_SIZE) {
-      await flushChatBuffer(user.room);
-    }
-
     callback();
   });
 
 
+  socket.on('editMessage', async (data, callback) => {
+    try {
+      const { messageId, newText, userId, chatLobbyId } = data;
+
+      // Ensure that the message ID and new text are valid
+      if (!mongoose.Types.ObjectId.isValid(messageId) || !isRealString(newText)) {
+        return callback('Invalid message or new text');
+      }
+
+      // Check if the message exists in MongoDB
+      const mongoMsg = await Message.findById(messageId);
+      if (!mongoMsg) return callback('Message not found in MongoDB');
+
+      // Check if the message is older than 7 minutes
+      const messageAge = Date.now() - mongoMsg.sentAt.getTime();
+      if (messageAge > 7 * 60 * 1000) {
+        return callback('Message edit time has expired (7 minutes limit)');
+      }
+
+      // Check if the user is the sender of the message
+      if (mongoMsg.sender.toString() !== userId) {
+        return callback('You can only edit your own messages');
+      }
+
+      // Update the message in MongoDB with the new text and set isEdit to true
+      await Message.updateOne(
+        { _id: messageId },
+        {
+          $set: {
+            message: newText,
+            edit: true  // Set isEdit to true when editing
+          }
+        }
+      );
+
+      // Update the chat lobby's last message to "*Message Edited*"
+      await ChatLobby.findOneAndUpdate(
+        { chatLobbyId: chatLobbyId },
+        {
+          $set: {
+            lastmsg: '*Message Edited*',  // Mark last message as edited
+            lastmsgid: messageId,         // Set the last message ID to the edited message
+            lastUpdated: new Date()        // Update the timestamp of the last update
+          }
+        }
+      );
+
+      // Broadcast the updated message to everyone in the room
+      io.to(chatLobbyId).emit('messageUpdated', {
+        _id: mongoMsg._id.toString(),
+        chatLobbyId: chatLobbyId,
+        text: newText,
+        senderId: mongoMsg.sender.toString(),
+        sentAt: mongoMsg.sentAt,
+        seen: mongoMsg.seen,
+        type: mongoMsg.type,
+        edit: true, // Mark the message as edited
+      });
+
+      callback(null, 'Message updated in MongoDB');
+    } catch (err) {
+      console.error('Error editing message:', err);
+      callback('Error editing message');
+    }
+  });
+
+
+  // ----------------- tribeCreateMessage (text) -----------------
   socket.on('tribeCreateMessage', async (data, callback) => {
     try {
       const user = users.getUser(socket.id);
@@ -230,7 +303,17 @@ export const registerChatHandlers = (socket, io) => {
         return callback('Invalid message');
       }
 
-      // 1) Save to MongoDB
+      // Validate/convert reply ids only if provided and valid
+      let replyIdObj = null;
+      let replyUserIdObj = null;
+      if (data.reply_id && mongoose.Types.ObjectId.isValid(data.reply_id)) {
+        replyIdObj = new mongoose.Types.ObjectId(data.reply_id);
+      }
+      if (data.reply_userid && mongoose.Types.ObjectId.isValid(data.reply_userid)) {
+        replyUserIdObj = new mongoose.Types.ObjectId(data.reply_userid);
+      }
+
+      // 1) Save to MongoDB (include reply fields)
       const newMsg = await TribeMessage.create({
         chatLobbyId: user.room,
         sender: user.userId,
@@ -239,9 +322,15 @@ export const registerChatHandlers = (socket, io) => {
         seen: false,
         senderUsername: user.name,
         sentAt: new Date(),
+        // reply fields
+        reply_id: replyIdObj,             // ObjectId or null
+        reply_userid: replyUserIdObj,     // ObjectId or null
+        reply: data.reply,        // string
+        reply_username: data.reply_username,
+        reply_media: data.reply_media,
       });
 
-      // 2) Broadcast to everyone with real IDs
+      // 2) Broadcast to everyone with real IDs (reply fields as strings/null)
       io.to(user.room).emit('newTribeMessage', {
         _id: newMsg._id.toString(),
         text: newMsg.message,
@@ -251,6 +340,12 @@ export const registerChatHandlers = (socket, io) => {
         sentAt: newMsg.sentAt,
         seen: newMsg.seen,
         type: newMsg.type,
+        // reply payload
+        reply_id: newMsg.reply_id ? newMsg.reply_id.toString() : null,
+        reply_userid: newMsg.reply_userid ? newMsg.reply_userid.toString() : null,
+        reply: newMsg.reply || "",
+        reply_username: (newMsg.reply_username || ""),
+        reply_media: newMsg.reply_media,
       });
 
       // 3) (Optional) clear any "deletefor" flags
@@ -278,6 +373,224 @@ export const registerChatHandlers = (socket, io) => {
       callback('Server error');
     }
   });
+  // Handle TribeEditMessage for tribe chat with a 7-minute limit
+  socket.on('tribeEditMessage', async (data, callback) => {
+    try {
+      const { messageId, newText, userId, chatLobbyId } = data;
+
+      // Ensure that the message ID and new text are valid
+      if (!mongoose.Types.ObjectId.isValid(messageId) || !isRealString(newText)) {
+        return callback('Invalid message or new text');
+      }
+
+      // Check if the tribe message exists in Redis first
+      const tempKey = `tribe:buffer:${chatLobbyId}`;
+      const bufferItems = await redis.lrange(tempKey, 0, -1);
+      let foundInRedis = false;
+      let msg = null;
+
+      for (const item of bufferItems) {
+        const redisMsg = JSON.parse(item);
+
+        if (redisMsg._id === messageId && redisMsg.senderId === userId) {
+          foundInRedis = true;
+          msg = redisMsg;
+          break;
+        }
+      }
+
+      if (foundInRedis) {
+        // Check if the message is older than 7 minutes
+        const messageAge = Date.now() - msg.timestamp;
+        if (messageAge > 7 * 60 * 1000) {
+          return callback('Message edit time has expired (7 minutes limit)');
+        }
+
+        // Update the message in Redis buffer
+        msg.text = newText;
+        await redis.lrem(tempKey, 1, JSON.stringify(msg));
+        await redis.rpush(tempKey, JSON.stringify(msg));
+
+        // Broadcast the updated message to the tribe chat
+        io.to(chatLobbyId).emit('tribeMessageUpdated', {
+          _id: msg._id.toString(),
+          chatLobbyId: chatLobbyId,
+          text: newText,
+          senderId: msg.senderId,
+          sentAt: new Date(msg.timestamp),
+          seen: msg.seen,
+          type: msg.type,
+          edit: true,
+        });
+
+        return callback(null, 'Tribe message updated in Redis');
+      }
+
+      // If not found in Redis, check MongoDB
+      const mongoMsg = await TribeMessage.findById(messageId);
+      if (!mongoMsg) return callback('Message not found in MongoDB');
+
+      // Check if the message is older than 7 minutes
+      const messageAge = Date.now() - mongoMsg.sentAt.getTime();
+      if (messageAge > 7 * 60 * 1000) {
+        return callback('Message edit time has expired (7 minutes limit)');
+      }
+
+      // Check if the user is the sender of the message
+      if (mongoMsg.sender.toString() !== userId) {
+        return callback('You can only edit your own messages');
+      }
+
+      // Update the message with the new text in MongoDB
+      mongoMsg.message = newText;
+      mongoMsg.edit = true;
+      await mongoMsg.save();
+
+      // Broadcast the updated message to the tribe chat
+      io.to(chatLobbyId).emit('tribeMessageUpdated', {
+        _id: mongoMsg._id.toString(),
+        chatLobbyId: chatLobbyId,
+        text: newText,
+        senderId: mongoMsg.sender.toString(),
+        sentAt: mongoMsg.sentAt,
+        seen: mongoMsg.seen,
+        type: mongoMsg.type,
+        edit: true,
+      });
+
+      callback(null, 'Tribe message updated in MongoDB');
+    } catch (err) {
+      console.error('Error editing tribe message:', err);
+      callback('Error editing tribe message');
+    }
+  });
+
+  socket.on('forwardMessage', async (message, callback) => {
+    const { userId1, userId2, messageContent } = message;
+
+    if (!userId1 || !userId2 || !messageContent) {
+      console.error('Invalid input for forwarding message');
+      return callback();
+    }
+
+    const timestamp = Date.now();
+    const msgId = new mongoose.Types.ObjectId();
+    // Find existing lobby
+    let existingLobby = await ChatLobby.findOne({
+      participants: { $all: [userId1, userId2] }
+    });
+
+    const chatLobbyId = existingLobby ? existingLobby.chatLobbyId : uuidv4();
+    try {
+
+
+      // Create the forwarded message document (as a new message)
+      const newMessage = new Message({
+        chatLobbyId,
+        sender: userId1,  // Assuming the sender is userId1
+        message: messageContent,
+        forward: true,  // Mark it as a forwarded message
+        type: 'text',
+        sentAt: new Date(timestamp),
+      });
+
+      // Save the new forwarded message to MongoDB
+      await newMessage.save();
+
+      // Broadcast the forwarded message to the room (to all participants in the lobby)
+      io.to(chatLobbyId).emit('newMessage', {
+        _id: newMessage._id.toString(),
+        text: messageContent,
+        from: userId1,
+        sentAt: new Date(timestamp),
+        seen: false,
+        type: 'text',
+        senderId: userId1,
+        chatLobbyId: chatLobbyId,
+        reply_id: message.reply_id ? message.reply_id.toString() : null,
+        reply_userid: message.reply_userid ? message.reply_userid.toString() : null,
+        reply: message.reply || "",
+        reply_username: message.reply_username || "",
+        reply_media: message.reply_media,
+      });
+
+      // Update the chat lobby with the new forwarded message
+      if (existingLobby) {
+        // Update existing lobby's last message and last message ID
+        existingLobby.lastmsg = messageContent; // Set the last message content to the forwarded message
+        existingLobby.lastmsgid = newMessage._id; // Set the last message ID to the forwarded message's ID
+        existingLobby.messages.push(newMessage);  // Push the new message into the existing lobby
+
+        existingLobby.lastUpdated = Date.now();
+        await existingLobby.save();
+
+        // Send back the existing chat lobby ID and message
+        io.emit('lobbyUpdated', {
+          chatLobbyId: existingLobby.chatLobbyId,
+          lastmsg: existingLobby.lastmsg,
+          lastmsgid: existingLobby.lastmsgid,
+          lastUpdated: existingLobby.lastUpdated,
+        });
+
+        return callback({
+          chatLobbyId: existingLobby.chatLobbyId,
+          message: 'Message forwarded to existing lobby and updated as the last message.',
+        });
+      }
+
+      // If no existing lobby, create a new one
+      const newChatLobby = new ChatLobby({
+        chatLobbyId,
+        participants: [userId1, userId2],
+        messages: [newMessage],  // Add the new message to the messages array
+        lastmsg: messageContent, // Set the last message content to the forwarded message
+        lastmsgid: newMessage._id,
+        deletefor: []
+      });
+
+      await newChatLobby.save();
+
+      // Send back the new chat lobby ID and message
+      io.emit('lobbyUpdated', {
+        chatLobbyId: newChatLobby.chatLobbyId,
+        lastmsg: newChatLobby.lastmsg,
+        lastmsgid: newChatLobby.lastmsgid,
+        lastUpdated: newChatLobby.lastUpdated,
+      });
+
+      return callback({
+        chatLobbyId,
+        message: 'Message sent in a new lobby and set as the last message.',
+      });
+
+    } catch (err) {
+      console.error("Error forwarding message:", err);
+      callback('Error forwarding message');
+    }
+
+    // Send notifications
+    ChatLobby.findOne({ chatLobbyId })
+      .then((lobby) => {
+        if (!lobby?.participants) return;
+        lobby.participants.forEach(async (participant) => {
+          if (participant.toString() === userId1) return; // Don't notify the sender
+          const other = await User.findById(participant);
+          if (!other) return;
+          await Notification.updateOne(
+            { user: participant },
+            {
+              $addToSet: {
+                type: 'message',
+                data: `New forwarded message from ${userId1}`,
+              }
+            },
+            { upsert: true }
+          );
+        });
+      })
+      .catch(console.error);
+  });
+
 
   // — on disconnect: flush any remaining buffers —
   socket.on('disconnect', async () => {
@@ -497,25 +810,25 @@ export const registerChatHandlers = (socket, io) => {
   });
 
   // Listen for typing event
-socket.on('typing', (data) => {
-  const user = users.getUser(socket.id);
-  if (user) {
-    // Emit to everyone in the room that the user is typing
-    socket.to(user.room).emit('userTyping', {
-      userId: user.userId,
-    });
-  }
-});
+  socket.on('typing', (data) => {
+    const user = users.getUser(socket.id);
+    if (user) {
+      // Emit to everyone in the room that the user is typing
+      socket.to(user.room).emit('userTyping', {
+        userId: user.userId,
+      });
+    }
+  });
 
-// Listen for stopTyping event
-socket.on('stopTyping', (data) => {
-  const user = users.getUser(socket.id);
-  if (user) {
-    // Emit to everyone in the room that the user has stopped typing
-    socket.to(user.room).emit('userStoppedTyping', {
-      userId: user.userId,
-    });
-  }
-});
+  // Listen for stopTyping event
+  socket.on('stopTyping', (data) => {
+    const user = users.getUser(socket.id);
+    if (user) {
+      // Emit to everyone in the room that the user has stopped typing
+      socket.to(user.room).emit('userStoppedTyping', {
+        userId: user.userId,
+      });
+    }
+  });
 
 };

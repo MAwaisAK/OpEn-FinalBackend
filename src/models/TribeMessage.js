@@ -19,15 +19,35 @@ const MessageSchema = new Schema({
   message: {
     type: String,
     // For text messages this is required, but for file messages, it can be empty.
-    required: function() {
+    required: function () {
       return this.type === 'text';
     }
   },
   fileUrl: {
     type: String, // URL to the uploaded file (if any)
   },
+  reply_id: {
+    type: Schema.Types.ObjectId,
+    ref: 'TribeMessage', // Reference to the same Message model for replies
+  },
+  reply_userid: {
+    type: Schema.Types.ObjectId,
+    ref: 'User', // Reference to the same Message model for replies
+  },
+  reply_username: {
+    type: String,
+  },
+  reply_media: {
+    type: Boolean,
+  },
   reply: {
-    type: String, // URL to the uploaded file (if any)
+    type: String,
+  },
+  isreplymedia: {
+    type: Boolean,
+  },
+  forward: {
+    type: Boolean,
   },
   isImage: {
     type: Boolean,
@@ -41,10 +61,17 @@ const MessageSchema = new Schema({
     type: Boolean,
     default: false,
   },
+  isEdit: {
+    type: Boolean,
+    default: false,
+  },
   type: {
     type: String,
     enum: ['text', 'file'],
     default: 'text'
+  },
+  caption: {
+    type: String,
   },
   seen: {
     type: Boolean,
@@ -53,6 +80,9 @@ const MessageSchema = new Schema({
   sentAt: {
     type: Date,
     default: Date.now,
+  },
+    edit:{
+    type: Boolean,
   },
   senderUsername: {
     type: String,

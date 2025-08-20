@@ -105,6 +105,15 @@ export const registerFileHandlers = (socket, io) => {
       const isImage = fileData.mimetype?.startsWith('image/') ?? imageRegex.test(fileData.fileUrl);
       const isVideo = fileData.mimetype?.startsWith('video/') ?? videoRegex.test(fileData.fileUrl);
 
+      let replyIdObj = null;
+      let replyUserIdObj = null;
+      if (fileData.reply_id && mongoose.Types.ObjectId.isValid(fileData.reply_id)) {
+        replyIdObj = new mongoose.Types.ObjectId(fileData.reply_id);
+      }
+      if (fileData.reply_userid && mongoose.Types.ObjectId.isValid(fileData.reply_userid)) {
+        replyUserIdObj = new mongoose.Types.ObjectId(fileData.reply_userid);
+      }
+
       // Save message
       const msgDoc = new Message({
         _id: msgId,
@@ -113,9 +122,16 @@ export const registerFileHandlers = (socket, io) => {
         message: "",
         fileUrl: fileData.fileUrl,
         isImage,
+        caption: fileData.caption || "",
         isVideo,
         type: "file",
         sentAt: new Date(),
+        reply_id: replyIdObj,
+        reply_userid: replyUserIdObj,
+        reply: (fileData.reply || ""),
+        reply_username: (fileData.reply_username || ""),
+        reply_media: fileData.reply_media,
+
       });
       await msgDoc.save();
 
@@ -126,7 +142,13 @@ export const registerFileHandlers = (socket, io) => {
         sentAt: msgDoc.sentAt,
         isImage,
         isVideo,
+        caption: fileData.caption || "",
         _id: msgId.toString(),
+        reply_id: msgDoc.reply_id ? msgDoc.reply_id.toString() : null,
+        reply_userid: msgDoc.reply_userid ? msgDoc.reply_userid.toString() : null,
+        reply: msgDoc.reply || "",
+        reply_username: (msgDoc.reply_username || ""),
+        reply_media: msgDoc.reply_media,
       });
 
       let lastmsgText;
@@ -167,6 +189,7 @@ export const registerFileHandlers = (socket, io) => {
   });
 
   // --- New File Message (Tribe chat) ---
+  // ----------------- tribeNewFileMessage (file) -----------------
   socket.on('tribeNewFileMessage', async (fileData, callback) => {
     const user = users.getUser(socket.id);
     if (!user || !fileData?.fileUrl) {
@@ -180,10 +203,21 @@ export const registerFileHandlers = (socket, io) => {
       const senderId = new mongoose.Types.ObjectId(user.userId);
       const msgId = new mongoose.Types.ObjectId();
 
+      // Determine image/video flags
       const imageRegex = /\.(png|jpe?g|gif|webp)(\?.*)?$/i;
       const videoRegex = /\.(mp4|mov|avi|mkv)(\?.*)?$/i;
       const isImage = fileData.mimetype?.startsWith('image/') ?? imageRegex.test(fileData.fileUrl);
       const isVideo = fileData.mimetype?.startsWith('video/') ?? videoRegex.test(fileData.fileUrl);
+
+      // Validate/convert reply ids (fileData comes from formData -> strings)
+      let replyIdObj = null;
+      let replyUserIdObj = null;
+      if (fileData.reply_id && mongoose.Types.ObjectId.isValid(fileData.reply_id)) {
+        replyIdObj = new mongoose.Types.ObjectId(fileData.reply_id);
+      }
+      if (fileData.reply_userid && mongoose.Types.ObjectId.isValid(fileData.reply_userid)) {
+        replyUserIdObj = new mongoose.Types.ObjectId(fileData.reply_userid);
+      }
 
       const msgDoc = new TribeMessage({
         _id: msgId,
@@ -192,28 +226,43 @@ export const registerFileHandlers = (socket, io) => {
         senderUsername: user.name,
         message: "",
         fileUrl: fileData.fileUrl,
+        caption: fileData.caption || "",
         isImage,
         isVideo,
         type: "file",
         sentAt: new Date(),
+        // reply fields
+        reply_id: replyIdObj,
+        reply_userid: replyUserIdObj,
+        reply: (fileData.reply || ""),
+        reply_username: (fileData.reply_username || ""),
+        reply_media: fileData.reply_media,
       });
       await msgDoc.save();
 
       io.to(user.room).emit('tribeNewFileMessage', {
         from: user.name,
-        senderId: senderId,
+        senderId: senderId.toString(),
         url: fileData.fileUrl,
         sentAt: msgDoc.sentAt,
+        caption: fileData.caption || "",
         isImage,
         isVideo,
         _id: msgId.toString(),
+        // reply payload
+        reply_id: msgDoc.reply_id ? msgDoc.reply_id.toString() : null,
+        reply_userid: msgDoc.reply_userid ? msgDoc.reply_userid.toString() : null,
+        reply: msgDoc.reply || "",
+        reply_username: (msgDoc.reply_username || ""),
+        reply_media: msgDoc.reply_media,
       });
 
-      callback && callback();
+      callback && callback(null, msgDoc);
     } catch (err) {
       console.error("Error saving tribe file message:", err);
       callback && callback("Error saving file message");
     }
   });
+
 
 };

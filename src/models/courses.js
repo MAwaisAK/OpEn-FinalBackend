@@ -18,6 +18,9 @@ const CourseSchema = new Schema({
     type: String,
     required: true,
   },
+  lessons: {
+    type: Number,
+  },
   courseCategory: {
     type: String,
     required: true,
@@ -39,32 +42,47 @@ const CourseSchema = new Schema({
   },
   bought: {
     type: Number,
-    default:0,
+    default: 0,
   },
   status: {
     type: Boolean,
-    default:true,
+    default: true,
   },
-  files: {
-    // Array to hold file URLs or file identifiers.
-    type: [String],
-  },
-  videosLinks: {
-    // Array to store video URLs.
-    type: [String],
-  },
-  assessmentLinks: {
-    // Array for any additional external links.
-    type: [String],
-  },
-  externalLinks: {
-    // Array for any additional external links.
-    type: [String],
-  },
-  referenceLinks: {
-    // Array for any additional external links.
-    type: [String],
-  },
+  files: [
+    {
+      lesson: { type:[Number] },   // Lesson title/name
+      content: { type: [String] }   // File URL or identifier
+    }
+  ],
+
+  videosLinks: [
+    {
+      lesson: { type:[Number] },   // Lesson title/name
+      content: { type: [String] } 
+    }
+  ],
+
+  assessmentLinks: [
+    {
+      lesson: { type:[Number] },   // Lesson title/name
+      content: { type: [String] } 
+    }
+  ],
+
+  externalLinks: [
+    {
+      lesson: { type:[Number] },   // Lesson title/name
+      content: { type: [String] } 
+    }
+  ],
+
+  referenceLinks: [
+    {
+      lesson: { type:[Number] },   // Lesson title/name
+      content: { type: [String] } 
+    }
+  ],
+
 }, { timestamps: true });
 
 const Course = mongoose.model("Course", CourseSchema);

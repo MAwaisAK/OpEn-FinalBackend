@@ -19,12 +19,32 @@ const MessageSchema = new Schema({
   message: {
     type: String,
     // For text messages this is required, but for file messages, it can be empty.
-    required: function() {
+    required: function () {
       return this.type === 'text';
     }
   },
+  reply_id: {
+    type: Schema.Types.ObjectId,
+    ref: 'Message', // Reference to the same Message model for replies
+  },
+  reply_userid: {
+    type: Schema.Types.ObjectId,
+    ref: 'User', // Reference to the same Message model for replies
+  },
+  reply_media: {
+    type: Boolean,
+  },
+  reply_username: {
+    type: String,
+  },
   reply: {
     type: String,
+  },
+  isreplymedia: {
+    type: Boolean,
+  },
+  forward: {
+    type: Boolean,
   },
   fileUrl: {
     type: String, // URL to the uploaded file (if any)
@@ -41,7 +61,14 @@ const MessageSchema = new Schema({
     type: Boolean,
     default: false,
   },
+  isEdit: {
+    type: Boolean,
+    default: false,
+  },
   callStatus: {
+    type: String,
+  },
+  caption: {
     type: String,
   },
   type: {
@@ -50,6 +77,10 @@ const MessageSchema = new Schema({
     default: 'text'
   },
   seen: {
+    type: Boolean,
+    default: false,
+  },
+  edit:{
     type: Boolean,
     default: false,
   },

@@ -35,6 +35,7 @@ router.get('/me', verifyAccessToken, auth.Me);
 router.post('/chat-lobby', verifyAccessToken, auth.getOrCreateChatLobby);
 router.get('/get-chat-lobbies', verifyAccessToken, auth.getUserChatLobbies);
 router.post("/create-chat-lobby", verifyAccessToken,auth.createChatLobby);
+router.post("/forward",auth.forwardMessage);
 router.get('/get-users',verifyAccessToken,auth.getAllUsers);
 router.get('/chat-messages/:chatLobbyId', verifyAccessToken, auth.getChatMessages);
 router.post('/delete-chat-for-user', verifyAccessToken, auth.deleteChatForUser);

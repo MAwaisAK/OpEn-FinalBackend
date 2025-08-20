@@ -625,6 +625,7 @@ const updateUserInfo = async (req, res, next) => {
 
     // Extract the user ID from URL params, body, or the authenticated user.
     const userId = req.params.id || req.body.id || req.user?.id;
+    console.log(req.body);
 
     if (!userId) {
       return next(Boom.badRequest("User ID is required."));
@@ -645,6 +646,7 @@ const updateUserInfo = async (req, res, next) => {
       aboutme,
       newPassword,
       oldPassword,
+      country,
       facebook_link,
       linkedin_link,
       instagram_link,
@@ -660,7 +662,21 @@ const updateUserInfo = async (req, res, next) => {
     } = req.body;
 
     // Upload profile picture if provided.
-    let profilePictureUrl = null;
+    let profilePictureUrl = user.profile_pic;
+
+    // Case 1: If frontend sent null (remove profile pic)
+    if (req.body.profile_pic === "null" || req.body.profile_pic === null) {
+      if (user.profile_pic) {
+        try {
+          await deleteFromFirebase(user.profile_pic);
+        } catch (err) {
+          console.warn("Failed to delete old profile picture:", err);
+        }
+      }
+      profilePictureUrl = null;
+    }
+
+    // Case 2: If a new profile picture is uploaded
     if (req.files?.profile_pic) {
       if (user.profile_pic) {
         try {
@@ -676,8 +692,23 @@ const updateUserInfo = async (req, res, next) => {
       );
     }
 
-    // If a new banner image is provided, delete the old one first
-    let bannerUrl = null;
+    // -------------------- BANNER --------------------
+
+    let bannerUrl = user.display_banner;
+
+    // Case 1: If frontend sent null (remove banner)
+    if (req.body.display_banner === "null" || req.body.display_banner === null) {
+      if (user.display_banner) {
+        try {
+          await deleteFromFirebase(user.display_banner);
+        } catch (err) {
+          console.warn("Failed to delete old banner image:", err);
+        }
+      }
+      bannerUrl = null;
+    }
+
+    // Case 2: If a new banner is uploaded
     if (req.files?.banner_image) {
       if (user.display_banner) {
         try {
@@ -697,6 +728,7 @@ const updateUserInfo = async (req, res, next) => {
     if (firstName) user.firstName = firstName;
     if (lastName) user.lastName = lastName;
     if (username) user.username = username;
+    if (country) user.country = country;
     if (aboutme) {
       user.aboutme = aboutme;
     } else {
@@ -773,8 +805,8 @@ const updateUserInfo = async (req, res, next) => {
     if (privacy) user.privacy = privacy;
 
     // Update file URLs if the uploads succeeded.
-    if (profilePictureUrl) user.profile_pic = profilePictureUrl;
-    if (bannerUrl) user.display_banner = bannerUrl;
+    user.profile_pic = profilePictureUrl;
+    user.display_banner = bannerUrl;
 
     // If a new password is provided, validate and update it.
     if (newPassword) {
@@ -1100,6 +1132,74 @@ const createChatLobby = async (req, res, next) => {
     next(error);
   }
 };
+
+const forwardMessage = async (req, res, next) => {
+  try {
+    console.log(req.body);
+    const { userId1, userId2, messageContent } = req.body;
+
+    if (!userId1 || !userId2 || !messageContent) {
+      return res.status(400).json({ message: "User IDs and message content are required." });
+    }
+
+    // Find existing lobby
+    let existingLobby = await ChatLobby.findOne({
+      participants: { $all: [userId1, userId2] }
+    });
+
+    const chatLobbyId = existingLobby ? existingLobby.chatLobbyId : uuidv4();
+
+    // Create a new forwarded message
+    const newMessage = await Message.create({
+      chatLobbyId,
+      sender: new mongoose.Types.ObjectId(userId1),
+      message: messageContent,
+      forward: true,
+      type: 'text'
+    });
+
+    // Log the new message to ensure it's properly created
+    console.log("New Forwarded Message Created:", newMessage);
+
+    if (existingLobby) {
+      // Update the last message and message ID in the existing lobby
+      existingLobby.lastmsg = "Forwarded"; // Set the last message to the forwarded message content
+      existingLobby.lastmsgid = newMessage._id; // Set the last message ID to the forwarded message's ID
+      existingLobby.messages.push(newMessage); // Push the new forwarded message
+
+      existingLobby.lastUpdated = Date.now();
+      await existingLobby.save();
+
+      return res.status(200).json({
+        chatLobbyId: existingLobby.chatLobbyId,
+        message: 'Message forwarded to existing lobby and updated as the last message.'
+      });
+    }
+
+    // Otherwise, create a new lobby
+    const newChatLobby = new ChatLobby({
+      chatLobbyId,
+      participants: [userId1, userId2],
+      messages: [newMessage], // Add the new message to the messages array
+      lastmsg: "Forwarded",
+      lastmsgid: newMessage._id,
+      deletefor: []
+    });
+
+    await newChatLobby.save();
+
+    return res.status(201).json({
+      chatLobbyId,
+      message: 'Message sent in a new lobby and set as the last message.'
+    });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+
+
 
 
 import Message from "../../models/Message.js";
@@ -2975,4 +3075,5 @@ export default {
   getChatLobby,
   deleteUser,
   getUsersChatInfo,
+  forwardMessage,
 };
