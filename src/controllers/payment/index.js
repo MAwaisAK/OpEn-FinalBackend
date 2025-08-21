@@ -103,7 +103,7 @@ export const createPaymentIntent = async (req, res, next) => {
     let discount = null;
     if (discountToken) {
       try {
-        discount = await validateDiscount(discountToken, packageType, userId,period);
+        discount = await validateDiscount(discountToken, packageType, userId, period);
       } catch (error) {
         return res.status(400).json({ success: false, message: error.message });
       }
@@ -163,7 +163,7 @@ export const createPaymentIntent = async (req, res, next) => {
       }
 
       // Apply discount if applicable
-      if (discount && discount.for === "subscription" && discount.subscription === packageType && discount.period ===period) {
+      if (discount && discount.for === "subscription" && discount.subscription === packageType && discount.period === period) {
         price = price - (price * discount.value) / 100;
         price = Math.round(price * 100) / 100;
       }
@@ -193,138 +193,138 @@ export const createPaymentIntent = async (req, res, next) => {
       });
 
       // Attach payment method
-if (amount > 0) {
-  // Attach payment method
-  await stripe.paymentMethods.attach(paymentMethodId, {
-    customer: user.stripeCustomerId,
-  });
+      if (amount > 0) {
+        // Attach payment method
+        await stripe.paymentMethods.attach(paymentMethodId, {
+          customer: user.stripeCustomerId,
+        });
 
-  await stripe.customers.update(user.stripeCustomerId, {
-    invoice_settings: { default_payment_method: paymentMethodId },
-  });
+        await stripe.customers.update(user.stripeCustomerId, {
+          invoice_settings: { default_payment_method: paymentMethodId },
+        });
 
-  // Create subscription
-  const subscription = await stripe.subscriptions.create({
-    customer: user.stripeCustomerId,
-    items: [{ price: priceObj.id }],
-    payment_behavior: "default_incomplete",
-    expand: ["latest_invoice.payment_intent"],
-    payment_settings: {
-      save_default_payment_method: "on_subscription",
-    },
-  });
+        // Create subscription
+        const subscription = await stripe.subscriptions.create({
+          customer: user.stripeCustomerId,
+          items: [{ price: priceObj.id }],
+          payment_behavior: "default_incomplete",
+          expand: ["latest_invoice.payment_intent"],
+          payment_settings: {
+            save_default_payment_method: "on_subscription",
+          },
+        });
 
-  // Try to get payment intent from subscription
-  let paymentIntent = subscription.latest_invoice?.payment_intent;
+        // Try to get payment intent from subscription
+        let paymentIntent = subscription.latest_invoice?.payment_intent;
 
-  // Fallback if paymentIntent is not generated
-  if (!paymentIntent) {
-    paymentIntent = await stripe.paymentIntents.create({
-      amount,
-      currency: "usd",
-      customer: user.stripeCustomerId,
-      payment_method: paymentMethodId,
-      confirm: true,
-      automatic_payment_methods: {
-        enabled: true,
-        allow_redirects: "never",
-      },
-      metadata: {
-        packageType,
-        userId,
-        subscriptionId: subscription.id,
-      },
-    });
-  }
+        // Fallback if paymentIntent is not generated
+        if (!paymentIntent) {
+          paymentIntent = await stripe.paymentIntents.create({
+            amount,
+            currency: "usd",
+            customer: user.stripeCustomerId,
+            payment_method: paymentMethodId,
+            confirm: true,
+            automatic_payment_methods: {
+              enabled: true,
+              allow_redirects: "never",
+            },
+            metadata: {
+              packageType,
+              userId,
+              subscriptionId: subscription.id,
+            },
+          });
+        }
 
-  // Ensure we have a valid payment intent
-  const validStatuses = ["requires_action", "requires_payment_method", "succeeded"];
-  if (!validStatuses.includes(paymentIntent.status)) {
-    // Cancel subscription if payment failed
-    await stripe.subscriptions.del(subscription.id);
-    return res.status(402).json({
-      success: false,
-      message: "Subscription setup failed; payment could not be processed.",
-    });
-  }
+        // Ensure we have a valid payment intent
+        const validStatuses = ["requires_action", "requires_payment_method", "succeeded"];
+        if (!validStatuses.includes(paymentIntent.status)) {
+          // Cancel subscription if payment failed
+          await stripe.subscriptions.del(subscription.id);
+          return res.status(402).json({
+            success: false,
+            message: "Subscription setup failed; payment could not be processed.",
+          });
+        }
 
-  // On success: record payment if paymentIntent is succeeded
-  if (paymentIntent.status === "succeeded") {
-    const paymentCount = await Payment.countDocuments();
-    const uniquePaymentId = `P-${1000 + paymentCount + 1}`;
+        // On success: record payment if paymentIntent is succeeded
+        if (paymentIntent.status === "succeeded") {
+          const paymentCount = await Payment.countDocuments();
+          const uniquePaymentId = `P-${1000 + paymentCount + 1}`;
 
-    await Payment.create({
-      user: userId,
-      data: packageType,
-      paymentid: uniquePaymentId,
-      payment: price,
-      tokens: tokens.toString(),
-      status: "paid",
-      period,
-      stripeSubscriptionId: subscription.id,
-      discountCode: discountToken,
-    });
+          await Payment.create({
+            user: userId,
+            data: packageType,
+            paymentid: uniquePaymentId,
+            payment: price,
+            tokens: tokens.toString(),
+            status: "paid",
+            period,
+            stripeSubscriptionId: subscription.id,
+            discountCode: discountToken,
+          });
 
-    if (discount) {
-      discount.used_by.push(userId);
-      discount.usesCount += 1;
-      await discount.save();
-    }
+          if (discount) {
+            discount.used_by.push(userId);
+            discount.usesCount += 1;
+            await discount.save();
+          }
 
-    // Calculate next billing date
-    let nextBillingDate = new Date();
-    if (interval === "month") {
-      nextBillingDate.setMonth(nextBillingDate.getMonth() + 1);
-    } else if (interval === "year") {
-      nextBillingDate.setFullYear(nextBillingDate.getFullYear() + 1);
-    }
+          // Calculate next billing date
+          let nextBillingDate = new Date();
+          if (interval === "month") {
+            nextBillingDate.setMonth(nextBillingDate.getMonth() + 1);
+          } else if (interval === "year") {
+            nextBillingDate.setFullYear(nextBillingDate.getFullYear() + 1);
+          }
 
-    // Update user subscription info
-    await User.findByIdAndUpdate(userId, {
-      subscription: packageType,
-      period,
-      subscribed_At: new Date(),
-      stripeSubscriptionId: subscription.id,
-      nextBillingDate,
-      $inc: { tokens },
-      trial_used: true,
-    });
-  }
+          // Update user subscription info
+          await User.findByIdAndUpdate(userId, {
+            subscription: packageType,
+            period,
+            subscribed_At: new Date(),
+            stripeSubscriptionId: subscription.id,
+            nextBillingDate,
+            $inc: { tokens },
+            trial_used: true,
+          });
+        }
 
-  // Return response with payment intent information
-  return res.status(200).json({
-    success: true,
-    clientSecret: paymentIntent.client_secret,
-    paymentIntentId: paymentIntent.id,
-    requiresAction: paymentIntent.status === "requires_action",
-    message:
-      paymentIntent.status === "succeeded"
-        ? "Subscription activated successfully"
-        : "Additional authentication required to complete your subscription",
-  });
-} else {
-  // For zero-amount subscription (free or trial)
-  console.log("Zero-amount subscription - skipping Stripe payment");
+        // Return response with payment intent information
+        return res.status(200).json({
+          success: true,
+          clientSecret: paymentIntent.client_secret,
+          paymentIntentId: paymentIntent.id,
+          requiresAction: paymentIntent.status === "requires_action",
+          message:
+            paymentIntent.status === "succeeded"
+              ? "Subscription activated successfully"
+              : "Additional authentication required to complete your subscription",
+        });
+      } else {
+        // For zero-amount subscription (free or trial)
+        console.log("Zero-amount subscription - skipping Stripe payment");
 
-  // Create subscription without payment intent
-  const subscription = await stripe.subscriptions.create({
-    customer: user.stripeCustomerId,
-    items: [{ price: priceObj.id }],
-    payment_behavior: "default_incomplete",
-    payment_settings: {
-      save_default_payment_method: "on_subscription",
-    },
-  });
+        // Create subscription without payment intent
+        const subscription = await stripe.subscriptions.create({
+          customer: user.stripeCustomerId,
+          items: [{ price: priceObj.id }],
+          payment_behavior: "default_incomplete",
+          payment_settings: {
+            save_default_payment_method: "on_subscription",
+          },
+        });
 
-  // No need for payment intent in case of free subscription
-  return res.status(200).json({
-    success: true,
-    clientSecret: null,
-    paymentIntentId: null,
-    requiresAction: false,
-    message: "Subscription activated successfully (no payment required)",
-  });
-}
+        // No need for payment intent in case of free subscription
+        return res.status(200).json({
+          success: true,
+          clientSecret: null,
+          paymentIntentId: null,
+          requiresAction: false,
+          message: "Subscription activated successfully (no payment required)",
+        });
+      }
 
 
     }
@@ -744,6 +744,23 @@ export const cancelAnySubscription = async (req, res, next) => {
         success: true,
         message: "Trial subscription cancelled."
       });
+    } else {
+      await User.findByIdAndUpdate(userId, {
+        $set: {
+          subscription: "none",
+          period: null,
+          subscribed_At: null,
+          nextBillingDate: null,
+          trail_status: null,
+          trial_used: false
+        }
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Trial subscription cancelled."
+      });
+
     }
 
     // Paid subscription case

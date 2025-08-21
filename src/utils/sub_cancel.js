@@ -24,14 +24,25 @@ async function checkSubscriptions() {
   }
 
   const now = new Date();
-const due = await User.find();
+const due = await User.find({
+    username: { $in: ['a43', 'Away'] }
+});
+
 
   console.log(`🔍 ${due.length} user(s) due for billing`);
 
   for (let user of due) {
+for (let user of due) {
     console.log(`\n— User ${user._id} (trial_used=${user.trial_used}) —`);
-      const sub = await stripe.subscriptions.retrieve(user.stripeSubscriptionId);
-      console.log('  Stripe status:', sub);
+    console.log(user);
+
+    // Check the subscription mode from the user data (livemode value from Stripe response)
+    const sub = await stripe.subscriptions.retrieve(user.stripeSubscriptionId);
+    
+    // Proceed if the subscription's livemode matches the key's mode
+    console.log('  Stripe status:', sub);
+}
+
     // try {
     //   const sub = await stripe.subscriptions.retrieve(user.stripeSubscriptionId);
     //   console.log('  Stripe status:', sub);
