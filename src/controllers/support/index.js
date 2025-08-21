@@ -123,7 +123,7 @@ export const getReportById = async (req, res, next) => {
  */
 export const getAllReports = async (req, res, next) => {
   try {
-    const reports = await Report.find({}).populate('user', 'username subscription');
+    const reports = await Report.find({}).populate('user', 'username subscription email');
     res.json(reports);
   } catch (error) {
     console.error("Error fetching reports:", error);

@@ -22,7 +22,7 @@ const httpServer = createServer(app);
 
 const io = new Server(httpServer, {
   cors: {
-    origin: ['https://openpreneurs.business','https://www.openpreneurs.business',"http://localhost:3000","http://192.168.1.8:3000"], // Allowed domain
+    origin: ['https://openpreneurs.business','https://www.openpreneurs.business',"http://localhost:3000"], // Allowed domain
     methods: ["GET", "POST"]
   }
 });
@@ -43,7 +43,7 @@ io.on('connection', (socket) => {
 // Make sure this is before any of your routes, including /proxy-download:
 app.use(cors({
   origin: ['https://openpreneurs.business',
-           'https://www.openpreneurs.business',"http://localhost:3000","http://192.168.1.8:3000"],
+           'https://www.openpreneurs.business',"http://localhost:3000"],
            methods: ["GET", "POST", "PUT", "OPTIONS","DELETE"],// include OPTIONS
   allowedHeaders: ["Origin","X-Requested-With",
                    "Content-Type","Accept","Authorization"]
