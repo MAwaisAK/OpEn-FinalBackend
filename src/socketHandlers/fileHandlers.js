@@ -5,6 +5,7 @@ import mongoose from 'mongoose';
 import Message from '../models/Message';
 import TribeMessage from '../models/TribeMessage';
 import multer from 'multer';
+import User from '../models/user';
 import { v4 as uuidv4 } from 'uuid';
 import ChatLobby from '../models/chatlobby';
 import { Storage } from '@google-cloud/storage';
@@ -134,7 +135,6 @@ export const registerFileHandlers = (socket, io) => {
 
       });
       await msgDoc.save();
-
       // Broadcast
       io.to(user.room).emit('newFileMessage', {
         from: user.name,
@@ -261,6 +261,142 @@ export const registerFileHandlers = (socket, io) => {
     } catch (err) {
       console.error("Error saving tribe file message:", err);
       callback && callback("Error saving file message");
+    }
+  });
+
+  // --- Forward a file message (1:1) ---
+  socket.on('forwardFileMessage', async (payload, callback) => {
+    try {
+      // Expect payload to contain: userId1, userId2, fileUrl, caption, mimetype, and optional reply fields
+      const {
+        name,
+        userId1,
+        userId2,
+        fileUrl,
+        isImage,
+        isVideo,
+      } = payload || {};
+
+      if (!userId1 || !userId2 || !fileUrl) {
+        console.error('Invalid input for forwarding file message');
+        return callback && callback('Invalid input');
+      }
+
+      const timestamp = Date.now();
+      const msgId = new mongoose.Types.ObjectId();
+
+      // Find existing lobby between the two users (if any)
+      let existingLobby = await ChatLobby.findOne({
+        participants: { $all: [userId1, userId2] }
+      });
+
+      const chatLobbyId = existingLobby ? existingLobby.chatLobbyId : uuidv4();
+
+      // Determine image/video flags (same logic as newFileMessage)
+      const imageRegex = /\.(png|jpe?g|gif|webp)(\?.*)?$/i;
+      const videoRegex = /\.(mp4|mov|avi|mkv)(\?.*)?$/i;
+
+      // Create the forwarded file message document
+      const newMessage = new Message({
+        _id: msgId,
+        chatLobbyId,
+        sender: userId1,
+        message: "",
+        fileUrl,
+        isImage,
+        isVideo,
+        type: "file",
+        forward: true,
+        sentAt: new Date(timestamp),
+        // reply fields
+      });
+
+      await newMessage.save();
+
+      // Broadcast the forwarded file message to the lobby (all clients in that room)
+      io.to(chatLobbyId).emit('newFileMessage', {
+        from: name,
+        url: fileUrl,
+        sentAt: newMessage.sentAt,
+        isImage,
+        type: "file",
+        isVideo,
+        _id: newMessage._id.toString(),
+        forward: true,
+        // reply payload as strings/null
+      });
+
+      // Choose lastmsg text based on file type
+      let lastmsgText;
+      if (isImage) lastmsgText = "📷 Image";
+      else if (isVideo) lastmsgText = "🎬 Video";
+      else lastmsgText = "📎 File";
+
+      // Update or create chat lobby
+      if (existingLobby) {
+        existingLobby.lastmsg = lastmsgText;
+        existingLobby.lastmsgid = newMessage._id;
+        existingLobby.messages.push(newMessage._id);
+        existingLobby.lastUpdated = Date.now();
+        await existingLobby.save();
+
+        io.emit('lobbyUpdated', {
+          chatLobbyId: existingLobby.chatLobbyId,
+          lastmsg: existingLobby.lastmsg,
+          lastmsgid: existingLobby.lastmsgid,
+          lastUpdated: existingLobby.lastUpdated,
+        });
+
+        // Respond to caller
+        return callback && callback(null, {
+          chatLobbyId: existingLobby.chatLobbyId,
+          message: 'File forwarded to existing lobby and updated as the last message.',
+        });
+      }
+
+      // No existing lobby: create new ChatLobby
+      const newChatLobby = new ChatLobby({
+        chatLobbyId,
+        participants: [userId1, userId2],
+        messages: [newMessage._id],
+        lastmsg: lastmsgText,
+        lastmsgid: newMessage._id,
+        deletefor: [],
+      });
+      await newChatLobby.save();
+
+      io.emit('lobbyUpdated', {
+        chatLobbyId: newChatLobby.chatLobbyId,
+        lastmsg: newChatLobby.lastmsg,
+        lastmsgid: newChatLobby.lastmsgid,
+        lastUpdated: newChatLobby.lastUpdated,
+      });
+
+      callback && callback(null, {
+        chatLobbyId,
+        message: 'File forwarded in a new lobby and set as the last message.',
+      });
+
+      // Send notifications to other participants (do not notify the sender)
+      ChatLobby.findOne({ chatLobbyId })
+        .then(async (lobby) => {
+          if (!lobby?.participants) return;
+          for (const participant of lobby.participants) {
+            if (participant.toString() === userId1) continue;
+            const other = await User.findById(participant);
+            if (!other) continue;
+            await Notification.updateOne(
+              { user: participant },
+              { $addToSet: { type: 'message', data: `New forwarded file from ${userId1}` } },
+              { upsert: true }
+            );
+          }
+        })
+        .catch(console.error);
+
+    } catch (err) {
+      console.error("Error forwarding file message:", err);
+      callback && callback('Error forwarding file message');
     }
   });
 

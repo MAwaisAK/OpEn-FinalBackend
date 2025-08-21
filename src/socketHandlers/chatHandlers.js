@@ -466,7 +466,7 @@ export const registerChatHandlers = (socket, io) => {
   });
 
   socket.on('forwardMessage', async (message, callback) => {
-    const { userId1, userId2, messageContent } = message;
+    const { userId1, userId2, messageContent, name } = message;
 
     if (!userId1 || !userId2 || !messageContent) {
       console.error('Invalid input for forwarding message');
@@ -501,7 +501,7 @@ export const registerChatHandlers = (socket, io) => {
       io.to(chatLobbyId).emit('newMessage', {
         _id: newMessage._id.toString(),
         text: messageContent,
-        from: userId1,
+        from: name,
         sentAt: new Date(timestamp),
         seen: false,
         type: 'text',
