@@ -72,6 +72,14 @@ export const deleteFromFirebase = async (publicUrl) => {
   }
 };
 
+const createFirstCoupon = async (discountValue) => {
+  const coupon = await stripe.coupons.create({
+    percent_off: discountValue,
+    duration: 'once', // Only for the first payment
+  });
+  return coupon.id;
+};
+
 
 const Register = async (req, res, next) => {
   const input = req.body;
@@ -177,7 +185,9 @@ const Register = async (req, res, next) => {
 
     // Apply discount
     const discountedPrice = Math.max(0, Math.round((price - (price * discountValue / 100)) * 100) / 100);
-    const amountInCents = Math.round(discountedPrice * 100);
+     const amountInCents = Math.round(price * 100);
+const couponId = await createFirstCoupon(discountValue);
+
 
     // Create Stripe product
     const product = await stripe.products.create({
@@ -207,9 +217,11 @@ const Register = async (req, res, next) => {
     const subscription = await stripe.subscriptions.create({
       customer: stripeCustomerId,
       items: [{ price: priceObj.id }],
+      discounts: [{ coupon: couponId }],
       trial_period_days: 3,
       payment_settings: { save_default_payment_method: "on_subscription" }
     });
+    
     const periodEnd = subscription.trial_end ?? subscription.current_period_end;
     if (!periodEnd) {
       // sanity check—this should never happen if Stripe returns one of these
